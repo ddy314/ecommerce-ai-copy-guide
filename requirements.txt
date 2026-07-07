@@ -1,0 +1,9 @@
+Flask==3.0.3
+gunicorn==22.0.0
+python-dotenv==1.0.1
+psycopg[binary]==3.2.1
+redis==5.0.8
+Scrapy==2.11.2
+pydantic==2.8.2
+pytest==8.3.2
+ruff==0.5.7
