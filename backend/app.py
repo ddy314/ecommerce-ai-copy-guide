@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from flask import Flask, jsonify
@@ -10,6 +11,7 @@ from backend.api.auth_routes import auth_bp
 from backend.api.merchant_routes import merchant_bp
 from backend.api.user_routes import user_bp
 from backend.api.crawl_routes import crawl_bp
+from backend.api.customer_service_routes import cs_bp
 from backend.config import AppConfig
 from backend.docs.openapi import docs_bp
 from backend.database import init_db
@@ -78,6 +80,8 @@ def create_app(config: AppConfig | None = None) -> Flask:
     
     app = Flask(__name__)
     app.config["APP_CONFIG"] = app_config
+    app.config["UPLOAD_FOLDER"] = os.path.join(os.path.dirname(__file__), "uploads")
+    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
     
     logger = logging.getLogger(__name__)
     logger.info(f"启动应用: env={app_config.app_env}, host={app_config.app_host}, port={app_config.app_port}")
@@ -137,8 +141,9 @@ def create_app(config: AppConfig | None = None) -> Flask:
     app.register_blueprint(merchant_bp, url_prefix="/api")
     app.register_blueprint(user_bp, url_prefix="/api")
     app.register_blueprint(crawl_bp, url_prefix="/api")
+    app.register_blueprint(cs_bp, url_prefix="/api")
     app.register_blueprint(docs_bp)
-    logger.info("应用初始化完成，已注册全部蓝图: API + 认证 + 商家 + 用户")
+    logger.info("应用初始化完成，已注册全部蓝图: API + 认证 + 商家 + 用户 + 客服")
     return app
 
 

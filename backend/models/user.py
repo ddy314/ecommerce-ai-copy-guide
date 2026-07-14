@@ -22,6 +22,7 @@ class User(Base):
     phone: Mapped[str] = mapped_column(String(20), nullable=True, comment="手机号")
     email: Mapped[str] = mapped_column(String(200), nullable=True, comment="邮箱")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否启用")
+    display_id: Mapped[str] = mapped_column(String(64), nullable=True, unique=True, comment="展示ID")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -35,6 +36,7 @@ class User(Base):
             "phone": self.phone,
             "email": self.email,
             "is_active": self.is_active,
+            "display_id": self.display_id or "",
             "password": self.password_plain or "",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

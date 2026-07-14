@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
@@ -15,6 +16,8 @@ from backend.models.user import User
 from backend.models.shopping import Order
 from backend.services.auth_service import require_merchant, hash_password
 from backend.services.rag_service import RAGService
+from backend.utils.helpers import generate_product_display_id
+from backend.api.auth_routes import _save_uploaded_file, ALLOWED_IMAGE_EXTENSIONS, ALLOWED_VIDEO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,12 @@ def create_product():
         if not data.get(field):
             return jsonify({"error": "invalid_input", "message": f"缺少必填字段: {field}"}), 400
 
+    image_urls = data.get("image_urls") or []
+    videos = data.get("videos") or []
+    image_url = data.get("image_url", "")
+    if not image_url and image_urls:
+        image_url = image_urls[0]
+
     with SessionLocal() as db:
         product = Product(
             name=data["name"],
@@ -45,12 +54,15 @@ def create_product():
             original_price=float(data["original_price"]) if data.get("original_price") else None,
             specs=data.get("specs", ""),
             selling_points=data.get("selling_points", ""),
-            image_url=data.get("image_url", ""),
+            image_url=image_url,
+            image_urls=image_urls if image_urls else None,
+            videos=videos if videos else None,
             source_url=data.get("source_url", ""),
             platform="manual",
             brand=data.get("brand", ""),
         )
         db.add(product)
+        product.display_id = generate_product_display_id(db)
         db.commit()
         db.refresh(product)
 
@@ -79,13 +91,23 @@ def update_product(product_id: int):
         if not product:
             return jsonify({"error": "not_found", "message": "商品不存在"}), 404
 
-        for field in ["name", "category", "specs", "selling_points", "image_url", "source_url"]:
+        for field in ["name", "category", "specs", "selling_points", "source_url"]:
             if field in data:
                 setattr(product, field, data[field])
         if "price" in data:
             product.price = float(data["price"])
         if "original_price" in data:
             product.original_price = float(data["original_price"]) or None
+
+        # 处理图片/视频列表，保持 image_url 与第一张图一致
+        if "image_urls" in data:
+            product.image_urls = data["image_urls"] or None
+        if "videos" in data:
+            product.videos = data["videos"] or None
+        if "image_url" in data:
+            product.image_url = data["image_url"]
+        elif "image_urls" in data and data["image_urls"]:
+            product.image_url = data["image_urls"][0]
 
         db.commit()
         db.refresh(product)
@@ -116,6 +138,37 @@ def delete_product(product_id: int):
         db.commit()
 
         return jsonify({"message": "商品已删除"})
+
+
+@merchant_bp.post("/merchant/products/upload")
+def upload_product_media():
+    """上传商品图片或视频，返回可访问 URL"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "no_file", "message": "请上传文件"}), 400
+
+    file = request.files["file"]
+    try:
+        # 根据文件类型选择保存目录
+        allowed = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
+        subdir = "product_videos" if _video_file(file.filename) else "product_images"
+        url = _save_uploaded_file(file, subdir, allowed)
+        return jsonify({"url": url})
+    except ValueError as e:
+        return jsonify({"error": "invalid_file", "message": str(e)}), 400
+    except Exception as e:
+        logger.error(f"商品媒体上传失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": "上传失败"}), 500
+
+
+def _video_file(filename: str | None) -> bool:
+    if not filename:
+        return False
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ALLOWED_VIDEO_EXTENSIONS
 
 
 @merchant_bp.get("/merchant/products")
@@ -173,11 +226,24 @@ def list_knowledge():
 
     product_id = request.args.get("product_id", type=int)
     category = request.args.get("category", "")
+    keyword = request.args.get("keyword", "")
     entries = rag_service.list_knowledge(
         product_id=product_id,
         category=category if category else None,
+        keyword=keyword if keyword else None,
     )
     return jsonify({"entries": entries, "total": len(entries)})
+
+
+@merchant_bp.get("/merchant/knowledge/categories")
+def list_knowledge_categories():
+    """知识库类型列表"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    categories = rag_service.list_knowledge_categories()
+    return jsonify({"categories": categories})
 
 
 @merchant_bp.post("/merchant/knowledge")
@@ -199,6 +265,30 @@ def add_knowledge():
         keywords=data.get("keywords", []),
     )
     return jsonify({"message": "知识条目添加成功", "entry": entry}), 201
+
+
+@merchant_bp.put("/merchant/knowledge/<int:entry_id>")
+def update_knowledge(entry_id: int):
+    """更新知识条目"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    data = request.get_json(silent=True) or {}
+    if not data.get("title") or not data.get("content"):
+        return jsonify({"error": "invalid_input", "message": "标题和内容不能为空"}), 400
+
+    entry = rag_service.update_knowledge(
+        entry_id=entry_id,
+        product_id=data.get("product_id"),
+        category=data.get("category"),
+        title=data["title"],
+        content=data["content"],
+        keywords=data.get("keywords", []),
+    )
+    if entry:
+        return jsonify({"message": "知识条目更新成功", "entry": entry})
+    return jsonify({"error": "not_found", "message": "知识条目不存在"}), 404
 
 
 @merchant_bp.delete("/merchant/knowledge/<int:entry_id>")

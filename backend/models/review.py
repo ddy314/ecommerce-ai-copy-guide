@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import uuid
-from sqlalchemy import String, Text, Integer, DateTime, ForeignKey
+from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -20,6 +20,9 @@ class Review(Base):
     content: Mapped[str] = mapped_column(Text, comment="评论内容")
     rating: Mapped[int] = mapped_column(Integer, default=5, comment="评分（1-5）")
     user_name: Mapped[str] = mapped_column(String(100), nullable=True, default="匿名用户", comment="用户名")
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="关联用户ID")
+    image_urls: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, comment="评价图片URL列表")
+    videos: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, comment="评价视频URL列表")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     # 关系
@@ -33,5 +36,8 @@ class Review(Base):
             "rating": self.rating,
             "author": self.user_name or "匿名用户",
             "user_name": self.user_name or "匿名用户",
+            "user_id": self.user_id,
+            "image_urls": self.image_urls or [],
+            "videos": self.videos or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

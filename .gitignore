@@ -34,6 +34,7 @@ build/
 
 # Logs and data
 *.log
+*.db
 data/raw/
 data/processed/
 

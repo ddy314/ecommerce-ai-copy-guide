@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
-import uuid
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, Response
 from sqlalchemy import select, desc, func
 
+from backend.api.auth_routes import (
+    _save_uploaded_file,
+    ALLOWED_IMAGE_EXTENSIONS,
+    ALLOWED_VIDEO_EXTENSIONS,
+)
 from backend.database import SessionLocal
 from backend.models.product import Product
 from backend.models.review import Review
@@ -20,6 +25,7 @@ from backend.services.rag_service import RAGService
 from backend.services.file_upload import FileUploadService
 from backend.services.ai_provider import get_ai_provider
 from backend.schemas.requests import ReviewAnalysisRequest
+from backend.utils.helpers import generate_order_no
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +273,8 @@ def create_order():
                 return jsonify({"error": "empty_cart", "message": "没有有效商品"}), 400
 
             # 创建订单
-            order_no = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:6].upper()}"
+            first_product_id = cart_items[0].product_id
+            order_no = generate_order_no(db, first_product_id)
             order = Order(
                 order_no=order_no,
                 user_id=user_payload["user_id"],
@@ -851,7 +858,7 @@ def upload_reviews_file():
 
 @user_bp.post("/user/reviews/submit")
 def submit_review():
-    """提交商品评论"""
+    """提交商品评论（支持图片/视频）"""
     user_payload, error = require_auth(request)
     if error:
         return jsonify(error), 401
@@ -860,17 +867,22 @@ def submit_review():
     product_id = _safe_int(data.get("product_id"))
     content = data.get("content", "").strip()
     rating = _safe_int(data.get("rating"), 5) or 5
+    image_urls = data.get("image_urls") or []
+    videos = data.get("videos") or []
 
-    if not product_id or not content:
-        return jsonify({"error": "invalid_input", "message": "商品ID和评论内容不能为空"}), 400
+    if not product_id:
+        return jsonify({"error": "invalid_input", "message": "商品ID不能为空"}), 400
 
     try:
         with SessionLocal() as db:
             review = Review(
                 product_id=product_id,
                 user_name=user_payload.get("username", "匿名用户"),
+                user_id=user_payload.get("user_id"),
                 rating=rating,
                 content=content,
+                image_urls=image_urls if image_urls else None,
+                videos=videos if videos else None,
             )
             db.add(review)
             db.commit()
@@ -881,3 +893,31 @@ def submit_review():
     except Exception as e:
         logger.error(f"提交评论失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
+@user_bp.post("/user/reviews/upload-media")
+def upload_review_media():
+    """上传评价图片或视频"""
+    user_payload, error = require_auth(request)
+    if error:
+        return jsonify(error), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "no_file", "message": "请上传文件"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "no_filename", "message": "文件名不能为空"}), 400
+
+    try:
+        ext = os.path.splitext(file.filename)[1].lower()
+        is_video = ext in ALLOWED_VIDEO_EXTENSIONS
+        subdir = "review_videos" if is_video else "review_images"
+        allowed = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
+        url = _save_uploaded_file(file, subdir, allowed)
+        return jsonify({"url": url, "type": "video" if is_video else "image"})
+    except ValueError as e:
+        return jsonify({"error": "invalid_file", "message": str(e)}), 400
+    except Exception as e:
+        logger.error(f"评价媒体上传失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": "上传失败"}), 500

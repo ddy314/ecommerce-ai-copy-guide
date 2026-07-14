@@ -1,10 +1,14 @@
-"""认证路由 - 登录/注册/找回密码"""
+"""认证路由 - 登录/注册/找回密码/头像上传"""
 from __future__ import annotations
 
 import logging
+import os
+import uuid
+from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_from_directory, current_app
 from sqlalchemy import select
+from werkzeug.utils import secure_filename
 
 from backend.database import SessionLocal
 from backend.models.user import User
@@ -14,10 +18,45 @@ from backend.services.auth_service import (
     create_token,
     verify_token,
 )
+from backend.utils.helpers import generate_user_display_id
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
+
+# 允许的图片扩展名
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+
+
+def _allowed_file(filename: str, allowed_extensions: set[str]) -> bool:
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in allowed_extensions
+
+
+def _ensure_upload_dir(subdir: str) -> str:
+    upload_folder = current_app.config.get("UPLOAD_FOLDER") or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "uploads"
+    )
+    path = os.path.join(upload_folder, subdir)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _save_uploaded_file(file, subdir: str, allowed_extensions: set[str]) -> str:
+    """保存上传文件，返回相对 URL 路径"""
+    if not file or not file.filename:
+        raise ValueError("未选择文件")
+    filename = secure_filename(file.filename)
+    if not _allowed_file(filename, allowed_extensions):
+        raise ValueError(f"不支持的文件格式，支持: {', '.join(allowed_extensions)}")
+
+    ext = os.path.splitext(filename)[1].lower()
+    unique_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
+    save_dir = _ensure_upload_dir(subdir)
+    save_path = os.path.join(save_dir, unique_name)
+    file.save(save_path)
+    return f"/uploads/{subdir}/{unique_name}"
 
 
 @auth_bp.post("/auth/login")
@@ -93,6 +132,7 @@ def register():
             role="user",
         )
         db.add(user)
+        user.display_id = generate_user_display_id(db)
         db.commit()
         db.refresh(user)
 
@@ -207,3 +247,45 @@ def update_profile():
         db.refresh(user)
 
         return jsonify({"message": "资料更新成功", "user": user.to_dict()})
+
+
+@auth_bp.post("/auth/avatar")
+def upload_avatar():
+    """上传用户头像"""
+    from backend.services.auth_service import require_auth
+
+    user_payload, error = require_auth(request)
+    if error:
+        return jsonify(error), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "no_file", "message": "请上传头像文件"}), 400
+
+    file = request.files["file"]
+    try:
+        avatar_url = _save_uploaded_file(file, "avatars", ALLOWED_IMAGE_EXTENSIONS)
+    except ValueError as e:
+        return jsonify({"error": "invalid_file", "message": str(e)}), 400
+    except Exception as e:
+        logger.error(f"头像上传失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": "头像上传失败"}), 500
+
+    with SessionLocal() as db:
+        user = db.get(User, user_payload["user_id"])
+        if not user:
+            return jsonify({"error": "not_found", "message": "用户不存在"}), 404
+
+        user.avatar = avatar_url
+        db.commit()
+        db.refresh(user)
+
+        return jsonify({"message": "头像上传成功", "avatar": avatar_url, "user": user.to_dict()})
+
+
+@auth_bp.get("/uploads/<path:filename>")
+def serve_upload(filename: str):
+    """提供上传文件访问"""
+    upload_folder = current_app.config.get("UPLOAD_FOLDER") or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "uploads"
+    )
+    return send_from_directory(upload_folder, filename)
