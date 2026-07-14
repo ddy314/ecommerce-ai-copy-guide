@@ -31,10 +31,6 @@ const form = ref({
   highlights_text: '护腰支撑\n透气坐垫\n稳固耐用',
 })
 
-function getHighlightsList(): string[] {
-  return form.value.highlights_text.split('\n').filter(s => s.trim())
-}
-
 // 加载商品分类列表
 async function loadCategories() {
   try {

@@ -131,12 +131,6 @@ async function copyResult() {
   }, 2000)
 }
 
-function updateSellingPoints() {
-  form.value.selling_points = form.value.selling_points_text
-    .split('\n')
-    .filter(s => s.trim())
-}
-
 async function handleSubmit() {
   if (!form.value.product_name) {
     error.value = '请先从数据库选择商品'

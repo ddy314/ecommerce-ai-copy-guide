@@ -53,12 +53,16 @@ const categoryConfig: Record<string, { label: string; color: string }> = {
   policy: { label: '政策', color: '#5d6dff' },
 }
 
-const categoryOptions = [
+const builtinCategoryOptions = [
   { value: 'spec', label: '规格参数' },
   { value: 'faq', label: '常见问题' },
   { value: 'after_sale', label: '售后政策' },
   { value: 'policy', label: '政策' },
 ]
+
+const categoryOptions = ref<{ value: string; label: string }[]>([...builtinCategoryOptions])
+
+const CUSTOM_CATEGORY_VALUE = '__custom__'
 
 // 列表状态
 const loading = ref(false)
@@ -66,15 +70,21 @@ const error = ref<string | null>(null)
 const items = ref<KnowledgeItem[]>([])
 const selectedCategory = ref('')
 const selectedProduct = ref<number | string>('')
+const searchKeyword = ref('')
 
 // 商品下拉选项
 const products = ref<ProductOption[]>([])
 
-// 新增弹窗
+// 新增/编辑弹窗
 const showModal = ref(false)
 const form = ref<KnowledgeForm>(emptyForm())
 const saving = ref(false)
 const formError = ref<string | null>(null)
+const editingId = ref<number | null>(null)
+const customCategory = ref('')
+
+const isCustomCategory = computed(() => form.value.category === CUSTOM_CATEGORY_VALUE)
+const modalTitle = computed(() => (editingId.value ? '编辑知识条目' : '新增知识条目'))
 
 // 自动构建弹窗
 const showAutoBuild = ref(false)
@@ -130,6 +140,23 @@ async function loadProducts() {
   }
 }
 
+async function loadCategories() {
+  try {
+    const res = await fetch(`${API_BASE}/api/merchant/knowledge/categories`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    const existing = new Set(builtinCategoryOptions.map((o) => o.value))
+    const dynamic = (data.categories || [])
+      .filter((c: string) => c && !existing.has(c))
+      .map((c: string) => ({ value: c, label: c }))
+    categoryOptions.value = [...builtinCategoryOptions, ...dynamic]
+  } catch (e) {
+    console.error('加载知识类型失败:', e)
+  }
+}
+
 async function loadKnowledge() {
   loading.value = true
   error.value = null
@@ -137,6 +164,7 @@ async function loadKnowledge() {
     const params = new URLSearchParams()
     if (selectedProduct.value !== '') params.set('product_id', String(selectedProduct.value))
     if (selectedCategory.value) params.set('category', selectedCategory.value)
+    if (searchKeyword.value.trim()) params.set('keyword', searchKeyword.value.trim())
 
     const res = await fetch(
       `${API_BASE}/api/merchant/knowledge?${params.toString()}`,
@@ -160,13 +188,40 @@ function applyFilter() {
 }
 
 function openCreate() {
+  editingId.value = null
+  customCategory.value = ''
   form.value = emptyForm()
+  formError.value = null
+  showModal.value = true
+}
+
+function openEdit(item: KnowledgeItem) {
+  editingId.value = item.id
+  const isBuiltin = builtinCategoryOptions.some((o) => o.value === item.category)
+  customCategory.value = isBuiltin ? '' : item.category
+  form.value = {
+    category: isBuiltin ? item.category : CUSTOM_CATEGORY_VALUE,
+    product_id: item.product_id ?? '',
+    title: item.title,
+    content: item.content,
+    keywords: parseKeywords(item.keywords).join(', '),
+  }
   formError.value = null
   showModal.value = true
 }
 
 function closeModal() {
   showModal.value = false
+  editingId.value = null
+  customCategory.value = ''
+}
+
+function resolveCategory(): string {
+  if (form.value.category === CUSTOM_CATEGORY_VALUE) {
+    const cat = customCategory.value.trim()
+    return cat || 'faq'
+  }
+  return form.value.category
 }
 
 async function handleSubmit() {
@@ -178,18 +233,26 @@ async function handleSubmit() {
     formError.value = '请填写内容'
     return
   }
+  const category = resolveCategory()
+  if (form.value.category === CUSTOM_CATEGORY_VALUE && !customCategory.value.trim()) {
+    formError.value = '请填写新类型名称'
+    return
+  }
   saving.value = true
   formError.value = null
   try {
     const payload = {
-      category: form.value.category,
+      category,
       product_id: form.value.product_id === '' ? null : Number(form.value.product_id),
       title: form.value.title.trim(),
       content: form.value.content.trim(),
       keywords: parseKeywords(form.value.keywords),
     }
-    const res = await fetch(`${API_BASE}/api/merchant/knowledge`, {
-      method: 'POST',
+    const url = editingId.value
+      ? `${API_BASE}/api/merchant/knowledge/${editingId.value}`
+      : `${API_BASE}/api/merchant/knowledge`
+    const res = await fetch(url, {
+      method: editingId.value ? 'PUT' : 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     })
@@ -198,6 +261,9 @@ async function handleSubmit() {
       throw new Error(err.message || `HTTP ${res.status}`)
     }
     showModal.value = false
+    editingId.value = null
+    customCategory.value = ''
+    await loadCategories()
     await loadKnowledge()
   } catch (e) {
     formError.value = e instanceof Error ? e.message : '保存失败'
@@ -282,6 +348,7 @@ function productName(id?: number | null): string {
 
 onMounted(() => {
   loadProducts()
+  loadCategories()
   loadKnowledge()
 })
 </script>
@@ -303,6 +370,13 @@ onMounted(() => {
             {{ p.name }}
           </option>
         </select>
+        <input
+          v-model="searchKeyword"
+          type="text"
+          class="kb-select kb-search"
+          placeholder="搜索标题 / 内容 / 关键词"
+          @keyup.enter="applyFilter"
+        />
       </div>
       <div class="kb-actions">
         <button class="kb-btn kb-btn--ghost" @click="openAutoBuild">从商品自动构建</button>
@@ -347,7 +421,10 @@ onMounted(() => {
             {{ categoryLabel(item.category) }}
           </span>
           <h4 class="kb-card__title">{{ item.title }}</h4>
-          <button class="kb-del" @click="askDelete(item)">删除</button>
+          <div class="kb-card__actions">
+            <button class="kb-edit" @click="openEdit(item)">编辑</button>
+            <button class="kb-del" @click="askDelete(item)">删除</button>
+          </div>
         </div>
         <p class="kb-card__content">{{ item.content }}</p>
         <div class="kb-card__foot">
@@ -368,11 +445,11 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 新增弹窗 -->
+    <!-- 新增/编辑弹窗 -->
     <div v-if="showModal" class="kb-modal-mask" @click.self="closeModal">
       <div class="kb-modal">
         <div class="kb-modal__head">
-          <h3>新增知识条目</h3>
+          <h3>{{ modalTitle }}</h3>
           <button class="kb-modal__close" @click="closeModal">×</button>
         </div>
         <div class="kb-modal__body">
@@ -384,7 +461,16 @@ onMounted(() => {
                 <option v-for="opt in categoryOptions" :key="opt.value" :value="opt.value">
                   {{ opt.label }}
                 </option>
+                <option :value="CUSTOM_CATEGORY_VALUE">+ 新增类型</option>
               </select>
+            </div>
+            <div v-if="isCustomCategory" class="kb-form-group kb-form-group--full">
+              <label>新类型名称 <span class="kb-req">*</span></label>
+              <input
+                v-model="customCategory"
+                type="text"
+                placeholder="例如：物流说明、使用教程"
+              />
             </div>
             <div class="kb-form-group">
               <label>关联商品</label>
@@ -667,6 +753,12 @@ onMounted(() => {
   margin-bottom: 10px;
 }
 
+.kb-card__actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .kb-type-badge {
   display: inline-block;
   padding: 3px 12px;
@@ -685,21 +777,40 @@ onMounted(() => {
   min-width: 0;
 }
 
+.kb-edit,
 .kb-del {
   padding: 4px 12px;
-  border: 1px solid rgba(228, 57, 60, 0.4);
   border-radius: 8px;
-  background: transparent;
-  color: #e4393c;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
   flex: 0 0 auto;
 }
 
+.kb-edit {
+  border: 1px solid rgba(31, 138, 91, 0.4);
+  background: transparent;
+  color: #1f8a5b;
+}
+
+.kb-edit:hover {
+  background: #1f8a5b;
+  color: #fff;
+}
+
+.kb-del {
+  border: 1px solid rgba(228, 57, 60, 0.4);
+  background: transparent;
+  color: #e4393c;
+}
+
 .kb-del:hover {
   background: #e4393c;
   color: #fff;
+}
+
+.kb-search::placeholder {
+  color: var(--muted);
 }
 
 .kb-card__content {

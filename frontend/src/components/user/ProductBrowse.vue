@@ -27,6 +27,8 @@ interface ProductReview {
   rating: number
   content: string
   created_at: string
+  image_urls?: string[]
+  videos?: string[]
 }
 
 interface ProductDetail extends Product {
@@ -34,10 +36,13 @@ interface ProductDetail extends Product {
   description?: string | null
   stock?: number | null
   reviews?: ProductReview[]
+  image_urls?: string[]
+  original_price?: number | null
 }
 
 // ---------- 导航（由 UserLayout provide） ----------
 const navigate = inject<(page: string) => void>('navigate', () => {})
+const navigateToCustomerService = inject<(productId?: number) => void>('navigateToCustomerService', () => {})
 const targetProductId = inject<Ref<number | null>>('targetProductId', ref(null))
 
 // ---------- 状态 ----------
@@ -60,6 +65,7 @@ const detailLoading = ref(false)
 const detailProduct = ref<ProductDetail | null>(null)
 const detailQuantity = ref(1)
 const isFavorited = ref(false)
+const activeImageUrl = ref<string>('')
 
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -85,6 +91,19 @@ function authHeaders(): HeadersInit {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 }
+
+// ---------- 商品详情图库 ----------
+const galleryImages = computed(() => {
+  if (!detailProduct.value) return []
+  const urls: string[] = []
+  if (detailProduct.value.image_url) urls.push(detailProduct.value.image_url)
+  if (detailProduct.value.image_urls?.length) {
+    detailProduct.value.image_urls.forEach((url) => {
+      if (url && !urls.includes(url)) urls.push(url)
+    })
+  }
+  return urls
+})
 
 // ---------- 排序后的商品列表 ----------
 const sortedProducts = computed(() => {
@@ -180,6 +199,7 @@ async function openDetail(product: Product) {
   detailProduct.value = null
   detailQuantity.value = 1
   isFavorited.value = false
+  activeImageUrl.value = product.image_url || ''
 
   // 记录浏览历史
   recordHistory(product.id)
@@ -192,9 +212,12 @@ async function openDetail(product: Product) {
     const data = await response.json()
     detailProduct.value = data.product || data
     isFavorited.value = data.is_favorited || false
+    const imgs = galleryImages.value
+    activeImageUrl.value = imgs[0] || ''
   } catch {
     // 降级：使用列表中的基本信息
     detailProduct.value = { ...product, reviews: [] }
+    activeImageUrl.value = product.image_url || ''
   } finally {
     detailLoading.value = false
   }
@@ -212,6 +235,7 @@ async function openDetailById(productId: number) {
   detailProduct.value = null
   detailQuantity.value = 1
   isFavorited.value = false
+  activeImageUrl.value = ''
 
   recordHistory(productId)
 
@@ -223,6 +247,8 @@ async function openDetailById(productId: number) {
     const data = await response.json()
     detailProduct.value = data.product || data
     isFavorited.value = data.is_favorited || false
+    const imgs = galleryImages.value
+    activeImageUrl.value = imgs[0] || ''
   } catch {
     detailLoading.value = false
   } finally {
@@ -273,6 +299,14 @@ function handleBuyNow() {
   addToCart(detailProduct.value.id, detailQuantity.value)
   closeDetail()
   navigate('cart')
+}
+
+// ---------- 询问客服 ----------
+function handleAskCustomerService() {
+  if (!detailProduct.value) return
+  const productId = detailProduct.value.id
+  closeDetail()
+  navigateToCustomerService(productId)
 }
 
 // ---------- 收藏 / 取消收藏 ----------
@@ -488,59 +522,86 @@ onMounted(() => {
 
           <!-- 详情内容 -->
           <div v-else-if="detailProduct" class="pb-modal__content">
-            <div class="pb-modal__top">
-              <!-- 大图 -->
-              <div class="pb-modal__image">
-                <img
-                  v-if="detailProduct.image_url"
-                  :src="detailProduct.image_url"
-                  :alt="detailProduct.name"
-                />
-                <div v-else class="pb-card__noimg pb-card__noimg--lg">暂无图片</div>
+            <!-- 头部标题区 -->
+            <div class="pb-detail__header">
+              <div class="pb-detail__badges">
+                <span v-if="detailProduct.category" class="pb-detail__badge pb-detail__badge--cat">{{ detailProduct.category }}</span>
+                <span v-if="detailProduct.brand" class="pb-detail__badge pb-detail__badge--brand">{{ detailProduct.brand }}</span>
+                <span v-if="detailProduct.platform && detailProduct.platform !== 'manual'" class="pb-detail__badge pb-detail__badge--platform">{{ detailProduct.platform }}</span>
+              </div>
+              <h2 class="pb-detail__name">{{ detailProduct.name }}</h2>
+            </div>
+
+            <div class="pb-detail__body">
+              <!-- 左侧：图库 -->
+              <div class="pb-detail__gallery">
+                <div class="pb-detail__main-image">
+                  <img
+                    v-if="activeImageUrl"
+                    :src="activeImageUrl"
+                    :alt="detailProduct.name"
+                  />
+                  <div v-else class="pb-detail__noimg">暂无图片</div>
+                </div>
+                <div v-if="galleryImages.length > 1" class="pb-detail__thumbs">
+                  <button
+                    v-for="(url, idx) in galleryImages"
+                    :key="idx"
+                    :class="['pb-detail__thumb', { active: activeImageUrl === url }]"
+                    @click="activeImageUrl = url"
+                  >
+                    <img :src="url" />
+                  </button>
+                </div>
               </div>
 
-              <!-- 基本信息 -->
-              <div class="pb-modal__info">
-                <h2 class="pb-modal__name">{{ detailProduct.name }}</h2>
-                <div class="pb-modal__price-row">
-                  <span class="pb-modal__price">¥{{ formatPrice(detailProduct.price) }}</span>
-                  <span v-if="detailProduct.brand" class="pb-modal__brand">{{ detailProduct.brand }}</span>
+              <!-- 右侧：信息 -->
+              <div class="pb-detail__info">
+                <div class="pb-detail__price-row">
+                  <span class="pb-detail__price">¥{{ formatPrice(detailProduct.price) }}</span>
+                  <span v-if="detailProduct.original_price" class="pb-detail__original-price">
+                    ¥{{ formatPrice(detailProduct.original_price) }}
+                  </span>
                 </div>
 
-                <!-- 评分 -->
-                <div v-if="detailProduct.rating" class="pb-modal__rating">
-                  <span class="pb-card__stars">{{ '★'.repeat(Math.round(detailProduct.rating)) }}</span>
-                  <span>{{ detailProduct.rating }} 分</span>
-                  <span v-if="detailProduct.review_count" class="pb-modal__review-count">
+                <div class="pb-detail__meta-row">
+                  <div v-if="detailProduct.rating" class="pb-detail__rating">
+                    <span class="pb-card__stars">{{ '★'.repeat(Math.round(detailProduct.rating)) }}</span>
+                    <span>{{ detailProduct.rating }} 分</span>
+                  </div>
+                  <span v-if="detailProduct.review_count" class="pb-detail__review-count">
                     {{ detailProduct.review_count }} 条评论
+                  </span>
+                  <span v-if="detailProduct.sales_count" class="pb-detail__sales">
+                    销量 {{ detailProduct.sales_count }}
                   </span>
                 </div>
 
                 <!-- 规格 -->
-                <div v-if="formatSpecs(detailProduct.specs).length > 0" class="pb-modal__specs">
-                  <div class="pb-modal__section-title">商品规格</div>
-                  <div class="pb-modal__spec-list">
+                <div v-if="formatSpecs(detailProduct.specs).length > 0" class="pb-detail__specs">
+                  <div class="pb-detail__section-title">规格参数</div>
+                  <div class="pb-detail__spec-list">
                     <div
                       v-for="[key, val] in formatSpecs(detailProduct.specs)"
                       :key="key"
-                      class="pb-modal__spec"
+                      class="pb-detail__spec"
                     >
-                      <span class="pb-modal__spec-key">{{ key }}</span>
-                      <span class="pb-modal__spec-val">{{ val }}</span>
+                      <span class="pb-detail__spec-key">{{ key }}</span>
+                      <span class="pb-detail__spec-val">{{ val }}</span>
                     </div>
                   </div>
                 </div>
 
                 <!-- 卖点 -->
-                <div v-if="detailProduct.selling_points" class="pb-modal__points">
-                  <div class="pb-modal__section-title">商品卖点</div>
-                  <p class="pb-modal__points-text">{{ detailProduct.selling_points }}</p>
+                <div v-if="detailProduct.selling_points" class="pb-detail__points">
+                  <div class="pb-detail__section-title">商品卖点</div>
+                  <p class="pb-detail__points-text">{{ detailProduct.selling_points }}</p>
                 </div>
 
                 <!-- 数量选择 -->
-                <div class="pb-modal__qty">
-                  <span class="pb-modal__qty-label">数量</span>
-                  <div class="pb-modal__qty-ctrl">
+                <div class="pb-detail__qty">
+                  <span class="pb-detail__qty-label">数量</span>
+                  <div class="pb-detail__qty-ctrl">
                     <button @click="decreaseQty">−</button>
                     <span>{{ detailQuantity }}</span>
                     <button @click="increaseQty">+</button>
@@ -548,26 +609,41 @@ onMounted(() => {
                 </div>
 
                 <!-- 操作按钮 -->
-                <div class="pb-modal__actions">
-                  <button class="pb-modal__btn pb-modal__btn--cart" @click="handleAddToCartFromDetail">
+                <div class="pb-detail__actions">
+                  <button class="pb-detail__btn pb-detail__btn--cart" @click="handleAddToCartFromDetail">
                     加入购物车
                   </button>
-                  <button class="pb-modal__btn pb-modal__btn--buy" @click="handleBuyNow">
+                  <button class="pb-detail__btn pb-detail__btn--buy" @click="handleBuyNow">
                     立即购买
                   </button>
                   <button
-                    :class="['pb-modal__btn', 'pb-modal__btn--fav', { active: isFavorited }]"
+                    :class="['pb-detail__btn', 'pb-detail__btn--fav', { active: isFavorited }]"
                     @click="toggleFavorite"
                   >
                     {{ isFavorited ? '已收藏' : '收藏' }}
+                  </button>
+                </div>
+
+                <!-- 询问客服 -->
+                <div class="pb-detail__cs">
+                  <div class="pb-detail__cs-title">
+                    <span>💬</span>
+                    <span>有疑问？咨询客服</span>
+                  </div>
+                  <p class="pb-detail__cs-desc">想了解商品细节、售后政策或搭配建议，可以一键发送当前商品给客服。</p>
+                  <button class="pb-detail__btn pb-detail__btn--cs" @click="handleAskCustomerService">
+                    询问客服
                   </button>
                 </div>
               </div>
             </div>
 
             <!-- 评论列表 -->
-            <div class="pb-modal__reviews">
-              <div class="pb-modal__section-title">用户评论</div>
+            <div class="pb-detail__reviews">
+              <div class="pb-detail__section-title">
+                用户评论
+                <span v-if="detailProduct.reviews?.length" class="pb-detail__reviews-count">共 {{ detailProduct.reviews.length }} 条</span>
+              </div>
               <div v-if="detailProduct.reviews && detailProduct.reviews.length > 0" class="pb-review-list">
                 <div
                   v-for="review in detailProduct.reviews"
@@ -575,13 +651,33 @@ onMounted(() => {
                   class="pb-review"
                 >
                   <div class="pb-review__head">
-                    <span class="pb-review__user">{{ review.user_name }}</span>
-                    <span class="pb-review__rating">
-                      {{ '★'.repeat(Math.round(review.rating)) }}
-                    </span>
+                    <div class="pb-review__avatar">{{ review.user_name?.charAt(0) || '用' }}</div>
+                    <div class="pb-review__meta">
+                      <span class="pb-review__user">{{ review.user_name }}</span>
+                      <span class="pb-review__rating">
+                        {{ '★'.repeat(Math.round(review.rating)) }}
+                      </span>
+                    </div>
                     <span class="pb-review__date">{{ review.created_at }}</span>
                   </div>
                   <p class="pb-review__content">{{ review.content }}</p>
+                  <!-- 评论图片/视频 -->
+                  <div v-if="(review.image_urls?.length || review.videos?.length)" class="pb-review__media">
+                    <div
+                      v-for="(url, idx) in review.image_urls || []"
+                      :key="`img-${idx}`"
+                      class="pb-review__media-item"
+                    >
+                      <img :src="url" />
+                    </div>
+                    <div
+                      v-for="(url, idx) in review.videos || []"
+                      :key="`video-${idx}`"
+                      class="pb-review__media-item pb-review__media-item--video"
+                    >
+                      <video :src="url" controls></video>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div v-else class="pb-review-empty">暂无评论</div>
@@ -1059,179 +1155,280 @@ onMounted(() => {
   padding: 28px;
 }
 
-.pb-modal__top {
-  display: grid;
-  grid-template-columns: 340px 1fr;
-  gap: 28px;
-  margin-bottom: 28px;
+.pb-detail__header {
+  margin-bottom: 24px;
 }
 
-.pb-modal__image {
+.pb-detail__badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.pb-detail__badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pb-detail__badge--cat {
+  color: var(--brand-dark);
+  background: rgba(155, 135, 245, 0.1);
+}
+
+.pb-detail__badge--brand {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.pb-detail__badge--platform {
+  color: var(--muted);
+  background: rgba(107, 114, 128, 0.1);
+}
+
+.pb-detail__name {
+  font-size: 26px;
+  line-height: 1.3;
+  margin: 0;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.pb-detail__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 32px;
+  margin-bottom: 32px;
+}
+
+/* 图库 */
+.pb-detail__gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pb-detail__main-image {
   width: 100%;
-  height: 340px;
-  border-radius: 14px;
+  aspect-ratio: 1 / 1;
+  border-radius: 20px;
   overflow: hidden;
-  background: #f8f4ef;
+  background: linear-gradient(135deg, #f8f4ef, #f0f4ff);
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 12px 40px rgba(155, 135, 245, 0.1);
 }
 
-.pb-modal__image img {
+.pb-detail__main-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform 0.4s ease;
+}
+
+.pb-detail__main-image:hover img {
+  transform: scale(1.03);
+}
+
+.pb-detail__noimg {
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.pb-detail__thumbs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pb-detail__thumb {
+  width: 64px;
+  height: 64px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f8f4ef;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.pb-detail__thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.pb-modal__info {
+.pb-detail__thumb:hover {
+  transform: translateY(-2px);
+}
+
+.pb-detail__thumb.active {
+  border-color: var(--brand);
+}
+
+/* 信息区 */
+.pb-detail__info {
   display: flex;
   flex-direction: column;
 }
 
-.pb-modal__name {
-  font-size: 22px;
-  line-height: 1.3;
-  margin: 0 0 14px;
-  color: var(--ink);
-}
-
-.pb-modal__price-row {
+.pb-detail__price-row {
   display: flex;
   align-items: baseline;
   gap: 14px;
   margin-bottom: 14px;
 }
 
-.pb-modal__price {
-  font-size: 32px;
+.pb-detail__price {
+  font-size: 36px;
   font-weight: 800;
   color: var(--brand);
 }
 
-.pb-modal__brand {
-  font-size: 14px;
+.pb-detail__original-price {
+  font-size: 16px;
   color: var(--muted);
+  text-decoration: line-through;
 }
 
-.pb-modal__rating {
+.pb-detail__meta-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
+  margin-bottom: 22px;
   font-size: 13px;
   color: var(--muted);
-  margin-bottom: 20px;
 }
 
-.pb-modal__rating .pb-card__stars {
+.pb-detail__rating {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pb-detail__rating .pb-card__stars {
   font-size: 15px;
 }
 
-.pb-modal__review-count {
-  margin-left: auto;
+.pb-detail__review-count {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
 }
 
-.pb-modal__section-title {
+.pb-detail__sales {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.pb-detail__section-title {
   font-size: 14px;
   font-weight: 700;
   color: var(--ink);
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   padding-left: 10px;
   border-left: 3px solid var(--brand);
 }
 
-.pb-modal__specs {
+.pb-detail__specs {
   margin-bottom: 20px;
 }
 
-.pb-modal__spec-list {
+.pb-detail__spec-list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
 }
 
-.pb-modal__spec {
+.pb-detail__spec {
   display: flex;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(217, 95, 45, 0.05);
-  border-radius: 8px;
+  background: rgba(155, 135, 245, 0.06);
+  border-radius: 10px;
   font-size: 13px;
 }
 
-.pb-modal__spec-key {
+.pb-detail__spec-key {
   color: var(--muted);
   flex-shrink: 0;
 }
 
-.pb-modal__spec-val {
+.pb-detail__spec-val {
   color: var(--ink);
   font-weight: 500;
 }
 
-.pb-modal__points {
+.pb-detail__points {
   margin-bottom: 20px;
 }
 
-.pb-modal__points-text {
+.pb-detail__points-text {
   font-size: 14px;
   line-height: 1.7;
   color: var(--muted);
   margin: 0;
-  padding: 12px 14px;
-  background: rgba(217, 95, 45, 0.05);
-  border-radius: 10px;
+  padding: 14px 16px;
+  background: rgba(253, 230, 138, 0.12);
+  border-radius: 12px;
 }
 
-.pb-modal__qty {
+.pb-detail__qty {
   display: flex;
   align-items: center;
   gap: 16px;
   margin-bottom: 22px;
 }
 
-.pb-modal__qty-label {
+.pb-detail__qty-label {
   font-size: 14px;
   color: var(--muted);
 }
 
-.pb-modal__qty-ctrl {
+.pb-detail__qty-ctrl {
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
+  background: var(--panel);
 }
 
-.pb-modal__qty-ctrl button {
-  width: 36px;
-  height: 36px;
+.pb-detail__qty-ctrl button {
+  width: 38px;
+  height: 38px;
   border: none;
-  background: var(--panel);
+  background: transparent;
   font-size: 18px;
   cursor: pointer;
   color: var(--ink);
-  transition: background 0.2s;
+  transition: background 0.2s, color 0.2s;
 }
 
-.pb-modal__qty-ctrl button:hover {
-  background: rgba(217, 95, 45, 0.08);
+.pb-detail__qty-ctrl button:hover {
+  background: rgba(155, 135, 245, 0.1);
   color: var(--brand);
 }
 
-.pb-modal__qty-ctrl span {
-  width: 48px;
+.pb-detail__qty-ctrl span {
+  width: 52px;
   text-align: center;
   font-size: 15px;
   font-weight: 600;
 }
 
-.pb-modal__actions {
+.pb-detail__actions {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  margin-bottom: 22px;
 }
 
-.pb-modal__btn {
+.pb-detail__btn {
   padding: 12px 28px;
   border: 1px solid var(--brand);
   border-radius: 999px;
@@ -1241,47 +1438,95 @@ onMounted(() => {
   transition: all 0.2s;
 }
 
-.pb-modal__btn--cart {
+.pb-detail__btn--cart {
   color: var(--brand);
   background: transparent;
 }
 
-.pb-modal__btn--cart:hover {
-  background: rgba(217, 95, 45, 0.08);
+.pb-detail__btn--cart:hover {
+  background: rgba(155, 135, 245, 0.1);
 }
 
-.pb-modal__btn--buy {
+.pb-detail__btn--buy {
   color: #fff;
-  background: var(--brand);
-  border-color: var(--brand);
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+  border-color: transparent;
+  box-shadow: 0 8px 24px rgba(155, 135, 245, 0.25);
 }
 
-.pb-modal__btn--buy:hover {
-  background: var(--brand-dark);
-  border-color: var(--brand-dark);
+.pb-detail__btn--buy:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px rgba(155, 135, 245, 0.35);
 }
 
-.pb-modal__btn--fav {
+.pb-detail__btn--fav {
   color: var(--muted);
   background: transparent;
   border-color: var(--line);
 }
 
-.pb-modal__btn--fav:hover {
+.pb-detail__btn--fav:hover {
   border-color: var(--yellow);
   color: var(--yellow);
 }
 
-.pb-modal__btn--fav.active {
+.pb-detail__btn--fav.active {
   border-color: var(--yellow);
   color: var(--yellow);
   background: rgba(250, 173, 20, 0.08);
 }
 
+.pb-detail__cs {
+  margin-top: auto;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(155, 135, 245, 0.06), rgba(147, 197, 253, 0.08));
+}
+
+.pb-detail__cs-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.pb-detail__cs-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+
+.pb-detail__btn--cs {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-blue), #60a5fa);
+  border-color: transparent;
+  padding: 10px 24px;
+  font-size: 14px;
+}
+
+.pb-detail__btn--cs:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(147, 197, 253, 0.3);
+}
+
 /* 评论 */
-.pb-modal__reviews {
+.pb-detail__reviews {
   border-top: 1px solid var(--line);
-  padding-top: 24px;
+  padding-top: 28px;
+}
+
+.pb-detail__reviews-count {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
 }
 
 .pb-review-list {
@@ -1291,17 +1536,36 @@ onMounted(() => {
 }
 
 .pb-review {
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(217, 95, 45, 0.02);
+  border-radius: 14px;
+  background: rgba(155, 135, 245, 0.03);
 }
 
 .pb-review__head {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.pb-review__avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+  color: #fff;
+  display: inline-grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.pb-review__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .pb-review__user {
@@ -1325,8 +1589,36 @@ onMounted(() => {
 .pb-review__content {
   margin: 0;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--ink);
+}
+
+.pb-review__media {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.pb-review__media-item {
+  width: 88px;
+  height: 88px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #f8f4ef;
+}
+
+.pb-review__media-item--video {
+  width: 150px;
+  height: 88px;
+}
+
+.pb-review__media-item img,
+.pb-review__media-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .pb-review-empty {
@@ -1368,16 +1660,29 @@ onMounted(() => {
     max-width: none;
   }
 
-  .pb-modal__top {
+  .pb-detail__body {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .pb-detail__name {
+    font-size: 20px;
+  }
+
+  .pb-detail__price {
+    font-size: 28px;
+  }
+
+  .pb-detail__spec-list {
     grid-template-columns: 1fr;
   }
 
-  .pb-modal__image {
-    height: 240px;
+  .pb-detail__actions {
+    flex-direction: column;
   }
 
-  .pb-modal__spec-list {
-    grid-template-columns: 1fr;
+  .pb-detail__btn {
+    width: 100%;
   }
 }
 </style>

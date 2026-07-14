@@ -22,12 +22,21 @@ interface Product {
   spec?: string | null
   selling_points?: string | null
   image_url?: string | null
+  image_urls?: string[] | null
+  videos?: string[] | null
   platform?: string | null
   source?: string | null
   brand?: string | null
   rating?: number | null
   review_count?: number | null
   created_at?: string
+}
+
+interface MediaFile {
+  file: File
+  url: string
+  uploading: boolean
+  error?: string
 }
 
 /** 表单数据结构 */
@@ -39,6 +48,8 @@ interface ProductForm {
   spec: string
   selling_points: string
   image_url: string
+  image_urls: string[]
+  videos: string[]
 }
 
 const emptyForm = (): ProductForm => ({
@@ -49,6 +60,8 @@ const emptyForm = (): ProductForm => ({
   spec: '',
   selling_points: '',
   image_url: '',
+  image_urls: [],
+  videos: [],
 })
 
 // 列表状态
@@ -73,6 +86,12 @@ const formError = ref<string | null>(null)
 // 删除确认弹窗
 const deleteTarget = ref<Product | null>(null)
 const deleting = ref(false)
+
+// 媒体上传
+const pendingImages = ref<MediaFile[]>([])
+const pendingVideos = ref<MediaFile[]>([])
+const imageUploading = ref(false)
+const videoUploading = ref(false)
 
 const modalTitle = computed(() => (editingId.value === null ? '新增商品' : '编辑商品'))
 
@@ -151,12 +170,16 @@ function changePageSize(size: number) {
 function openCreate() {
   editingId.value = null
   form.value = emptyForm()
+  pendingImages.value = []
+  pendingVideos.value = []
   formError.value = null
   showModal.value = true
 }
 
 function openEdit(product: Product) {
   editingId.value = product.id
+  const imgs = product.image_urls || []
+  const firstUrl = product.image_url || (imgs.length ? imgs[0] : '')
   form.value = {
     name: product.name || '',
     category: product.category || '',
@@ -164,8 +187,12 @@ function openEdit(product: Product) {
     original_price: product.original_price ?? '',
     spec: product.spec || '',
     selling_points: product.selling_points || '',
-    image_url: product.image_url || '',
+    image_url: firstUrl,
+    image_urls: imgs,
+    videos: product.videos || [],
   }
+  pendingImages.value = []
+  pendingVideos.value = []
   formError.value = null
   showModal.value = true
 }
@@ -176,6 +203,8 @@ function closeModal() {
 
 function buildPayload() {
   const f = form.value
+  const image_urls = [...f.image_urls]
+  const videos = [...f.videos]
   return {
     name: f.name.trim(),
     category: f.category.trim(),
@@ -184,12 +213,18 @@ function buildPayload() {
     spec: f.spec.trim(),
     selling_points: f.selling_points.trim(),
     image_url: f.image_url.trim(),
+    image_urls,
+    videos,
   }
 }
 
 async function handleSubmit() {
   if (!form.value.name.trim()) {
     formError.value = '请填写商品名称'
+    return
+  }
+  if (imageUploading.value || videoUploading.value) {
+    formError.value = '请等待媒体文件上传完成'
     return
   }
   saving.value = true
@@ -272,6 +307,96 @@ function sourceText(source?: string | null): string {
   return source
 }
 
+function mainImageUrl(product: Product): string {
+  return product.image_url || (product.image_urls && product.image_urls[0]) || ''
+}
+
+async function uploadMedia(file: File): Promise<string> {
+  const data = new FormData()
+  data.append('file', file)
+  const res = await fetch(`${API_BASE}/api/merchant/products/upload`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: data,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || `上传失败 ${res.status}`)
+  }
+  const json = await res.json()
+  return json.url
+}
+
+async function handleImageSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (!files.length) return
+  input.value = ''
+
+  const newItems: MediaFile[] = files.map((file) => ({
+    file,
+    url: URL.createObjectURL(file),
+    uploading: true,
+  }))
+  pendingImages.value.push(...newItems)
+  imageUploading.value = true
+
+  for (const item of newItems) {
+    try {
+      const url = await uploadMedia(item.file)
+      item.url = url
+      item.uploading = false
+      form.value.image_urls.push(url)
+      if (!form.value.image_url) form.value.image_url = url
+    } catch (e) {
+      item.error = e instanceof Error ? e.message : '上传失败'
+      item.uploading = false
+    }
+  }
+  imageUploading.value = pendingImages.value.some((i) => i.uploading)
+}
+
+async function handleVideoSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (!files.length) return
+  input.value = ''
+
+  const newItems: MediaFile[] = files.map((file) => ({
+    file,
+    url: URL.createObjectURL(file),
+    uploading: true,
+  }))
+  pendingVideos.value.push(...newItems)
+  videoUploading.value = true
+
+  for (const item of newItems) {
+    try {
+      const url = await uploadMedia(item.file)
+      item.url = url
+      item.uploading = false
+      form.value.videos.push(url)
+    } catch (e) {
+      item.error = e instanceof Error ? e.message : '上传失败'
+      item.uploading = false
+    }
+  }
+  videoUploading.value = pendingVideos.value.some((i) => i.uploading)
+}
+
+function removeImage(url: string) {
+  form.value.image_urls = form.value.image_urls.filter((u) => u !== url)
+  pendingImages.value = pendingImages.value.filter((i) => i.url !== url)
+  if (form.value.image_url === url) {
+    form.value.image_url = form.value.image_urls[0] || ''
+  }
+}
+
+function removeVideo(url: string) {
+  form.value.videos = form.value.videos.filter((u) => u !== url)
+  pendingVideos.value = pendingVideos.value.filter((i) => i.url !== url)
+}
+
 onMounted(() => {
   loadProducts()
 })
@@ -349,8 +474,8 @@ onMounted(() => {
             <td class="pm-cell-name">
               <div class="pm-name-box">
                 <img
-                  v-if="product.image_url"
-                  :src="product.image_url"
+                  v-if="mainImageUrl(product)"
+                  :src="mainImageUrl(product)"
                   :alt="product.name"
                   class="pm-thumb"
                   @error="(e: any) => e.target.style.visibility = 'hidden'"
@@ -449,9 +574,90 @@ onMounted(() => {
               <label>卖点（每行一个）</label>
               <textarea v-model="form.selling_points" rows="3" placeholder="护腰支撑&#10;透气坐垫"></textarea>
             </div>
+            <!-- 图片上传 -->
             <div class="pm-form-group pm-form-group--full">
-              <label>图片URL</label>
-              <input v-model="form.image_url" type="text" placeholder="https://..." />
+              <label>商品图片</label>
+              <div class="pm-media-upload">
+                <input
+                  ref="imageInput"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  class="hidden"
+                  @change="handleImageSelect"
+                />
+                <button
+                  type="button"
+                  class="pm-upload-btn"
+                  :disabled="imageUploading"
+                  @click="($refs.imageInput as HTMLInputElement).click()"
+                >
+                  {{ imageUploading ? '上传中...' : '+ 添加图片' }}
+                </button>
+              </div>
+              <div class="pm-media-grid">
+                <div
+                  v-for="(url, idx) in form.image_urls"
+                  :key="`img-${idx}`"
+                  class="pm-media-item"
+                >
+                  <img :src="url" alt="商品图片" />
+                  <button type="button" class="pm-media-del" @click="removeImage(url)">×</button>
+                </div>
+                <div
+                  v-for="(item, idx) in pendingImages"
+                  :key="`pimg-${idx}`"
+                  class="pm-media-item pm-media-item--pending"
+                >
+                  <img :src="item.url" alt="上传中" />
+                  <div v-if="item.uploading" class="pm-media-mask">上传中</div>
+                  <div v-else-if="item.error" class="pm-media-mask pm-media-mask--error" :title="item.error">失败</div>
+                  <button type="button" class="pm-media-del" @click="removeImage(item.url)">×</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 视频上传 -->
+            <div class="pm-form-group pm-form-group--full">
+              <label>商品视频</label>
+              <div class="pm-media-upload">
+                <input
+                  ref="videoInput"
+                  type="file"
+                  accept="video/*"
+                  multiple
+                  class="hidden"
+                  @change="handleVideoSelect"
+                />
+                <button
+                  type="button"
+                  class="pm-upload-btn pm-upload-btn--video"
+                  :disabled="videoUploading"
+                  @click="($refs.videoInput as HTMLInputElement).click()"
+                >
+                  {{ videoUploading ? '上传中...' : '+ 添加视频' }}
+                </button>
+              </div>
+              <div class="pm-media-grid">
+                <div
+                  v-for="(url, idx) in form.videos"
+                  :key="`vid-${idx}`"
+                  class="pm-media-item pm-media-item--video"
+                >
+                  <video :src="url" controls preload="metadata"></video>
+                  <button type="button" class="pm-media-del" @click="removeVideo(url)">×</button>
+                </div>
+                <div
+                  v-for="(item, idx) in pendingVideos"
+                  :key="`pvid-${idx}`"
+                  class="pm-media-item pm-media-item--video pm-media-item--pending"
+                >
+                  <video :src="item.url" preload="metadata"></video>
+                  <div v-if="item.uploading" class="pm-media-mask">上传中</div>
+                  <div v-else-if="item.error" class="pm-media-mask pm-media-mask--error" :title="item.error">失败</div>
+                  <button type="button" class="pm-media-del" @click="removeVideo(item.url)">×</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -983,6 +1189,119 @@ onMounted(() => {
 .pm-form-group textarea {
   resize: vertical;
   min-height: 72px;
+}
+
+/* 媒体上传 */
+.pm-media-upload {
+  margin-bottom: 10px;
+}
+
+.pm-upload-btn {
+  padding: 9px 16px;
+  border: 1px dashed var(--brand, #d95f2d);
+  border-radius: 10px;
+  background: rgba(217, 95, 45, 0.06);
+  color: var(--brand, #d95f2d);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pm-upload-btn:hover:not(:disabled) {
+  background: rgba(217, 95, 45, 0.12);
+}
+
+.pm-upload-btn--video {
+  border-color: #1677ff;
+  background: rgba(22, 119, 255, 0.06);
+  color: #1677ff;
+}
+
+.pm-upload-btn--video:hover:not(:disabled) {
+  background: rgba(22, 119, 255, 0.12);
+}
+
+.pm-upload-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pm-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+
+.pm-media-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line, #e8e4df);
+  background: #f7f7f7;
+}
+
+.pm-media-item--video {
+  aspect-ratio: 16 / 10;
+}
+
+.pm-media-item img,
+.pm-media-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pm-media-item--pending::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--brand, #d95f2d);
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+.pm-media-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pm-media-mask--error {
+  background: rgba(196, 30, 30, 0.65);
+}
+
+.pm-media-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.2s;
+}
+
+.pm-media-del:hover {
+  background: rgba(228, 57, 60, 0.85);
+}
+
+.hidden {
+  display: none;
 }
 
 @media (max-width: 640px) {

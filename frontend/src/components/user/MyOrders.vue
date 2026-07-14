@@ -30,6 +30,13 @@ interface Order {
   items: OrderItem[]
 }
 
+interface ReviewMediaItem {
+  file?: File
+  url: string
+  uploading: boolean
+  error?: string
+}
+
 // ---------- 状态 ----------
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -44,6 +51,26 @@ const totalPages = ref(1)
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailOrder = ref<Order | null>(null)
+
+// 确认收货弹窗
+const confirmVisible = ref(false)
+const pendingConfirmOrder = ref<Order | null>(null)
+
+// 评价弹窗
+const reviewVisible = ref(false)
+const reviewLoading = ref(false)
+const reviewOrder = ref<Order | null>(null)
+const reviewProduct = ref<OrderItem | null>(null)
+const reviewForm = ref({
+  product_id: 0,
+  rating: 5,
+  content: '',
+  image_urls: [] as string[],
+  videos: [] as string[],
+})
+const reviewImages = ref<ReviewMediaItem[]>([])
+const reviewVideos = ref<ReviewMediaItem[]>([])
+const reviewUploading = ref(false)
 
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -211,9 +238,21 @@ async function cancelOrder(order: Order, event?: Event) {
 }
 
 // ---------- 确认收货 ----------
-async function confirmReceipt(order: Order, event?: Event) {
+function showConfirmModal(order: Order, event?: Event) {
   event?.stopPropagation()
-  if (!confirm('确认已收到商品吗？')) return
+  pendingConfirmOrder.value = order
+  confirmVisible.value = true
+}
+
+function closeConfirmModal() {
+  confirmVisible.value = false
+  pendingConfirmOrder.value = null
+}
+
+async function executeConfirmReceipt() {
+  const order = pendingConfirmOrder.value
+  if (!order) return
+  closeConfirmModal()
   try {
     const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/confirm`, {
       method: 'POST',
@@ -225,9 +264,141 @@ async function confirmReceipt(order: Order, event?: Event) {
     }
     showToast('已确认收货')
     await loadOrders()
+    // 打开评价弹窗（可选）
+    openReviewModal(order)
   } catch (e) {
     showToast(e instanceof Error ? e.message : '确认收货失败', 'error')
   }
+}
+
+// ---------- 评价 ----------
+function openReviewModal(order: Order) {
+  reviewOrder.value = order
+  // 默认评价第一个商品
+  const firstItem = order.items[0] || null
+  reviewProduct.value = firstItem
+  reviewForm.value = {
+    product_id: firstItem?.product_id || 0,
+    rating: 5,
+    content: '',
+    image_urls: [],
+    videos: [],
+  }
+  reviewImages.value = []
+  reviewVideos.value = []
+  reviewVisible.value = true
+}
+
+function closeReviewModal() {
+  reviewVisible.value = false
+  reviewOrder.value = null
+  reviewProduct.value = null
+}
+
+function selectReviewProduct(item: OrderItem) {
+  reviewProduct.value = item
+  reviewForm.value.product_id = item.product_id
+}
+
+async function uploadReviewMedia(file: File): Promise<string> {
+  const data = new FormData()
+  data.append('file', file)
+  const response = await fetch(`${API_BASE}/api/user/reviews/upload-media`, {
+    method: 'POST',
+    headers: { ...(localStorage.getItem('token') ? { Authorization: `Bearer ${localStorage.getItem('token')}` } : {}) },
+    body: data,
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.message || `上传失败 ${response.status}`)
+  }
+  const json = await response.json()
+  return json.url
+}
+
+async function handleReviewImageSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (!files.length) return
+  input.value = ''
+  const items: ReviewMediaItem[] = files.map((file) => ({ file, url: URL.createObjectURL(file), uploading: true }))
+  reviewImages.value.push(...items)
+  reviewUploading.value = true
+  for (const item of items) {
+    try {
+      const url = await uploadReviewMedia(item.file!)
+      item.url = url
+      item.uploading = false
+      reviewForm.value.image_urls.push(url)
+    } catch (e) {
+      item.error = e instanceof Error ? e.message : '上传失败'
+      item.uploading = false
+    }
+  }
+  reviewUploading.value = reviewImages.value.some((i) => i.uploading) || reviewVideos.value.some((i) => i.uploading)
+}
+
+async function handleReviewVideoSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (!files.length) return
+  input.value = ''
+  const items: ReviewMediaItem[] = files.map((file) => ({ file, url: URL.createObjectURL(file), uploading: true }))
+  reviewVideos.value.push(...items)
+  reviewUploading.value = true
+  for (const item of items) {
+    try {
+      const url = await uploadReviewMedia(item.file!)
+      item.url = url
+      item.uploading = false
+      reviewForm.value.videos.push(url)
+    } catch (e) {
+      item.error = e instanceof Error ? e.message : '上传失败'
+      item.uploading = false
+    }
+  }
+  reviewUploading.value = reviewImages.value.some((i) => i.uploading) || reviewVideos.value.some((i) => i.uploading)
+}
+
+function removeReviewImage(url: string) {
+  reviewForm.value.image_urls = reviewForm.value.image_urls.filter((u) => u !== url)
+  reviewImages.value = reviewImages.value.filter((i) => i.url !== url)
+}
+
+function removeReviewVideo(url: string) {
+  reviewForm.value.videos = reviewForm.value.videos.filter((u) => u !== url)
+  reviewVideos.value = reviewVideos.value.filter((i) => i.url !== url)
+}
+
+async function submitReview() {
+  if (!reviewForm.value.product_id) return
+  if (reviewUploading.value) {
+    showToast('请等待媒体上传完成', 'error')
+    return
+  }
+  reviewLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/user/reviews/submit`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(reviewForm.value),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('评价提交成功')
+    closeReviewModal()
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '评价提交失败', 'error')
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+function skipReview() {
+  closeReviewModal()
 }
 
 // ---------- 格式化 ----------
@@ -342,7 +513,7 @@ onMounted(() => {
             </template>
             <!-- 已发货 -->
             <template v-else-if="order.status === 'shipped'">
-              <button class="mo-btn mo-btn--primary" @click="confirmReceipt(order, $event)">确认收货</button>
+              <button class="mo-btn mo-btn--primary" @click="showConfirmModal(order, $event)">确认收货</button>
             </template>
             <!-- 其他状态 -->
             <button class="mo-btn mo-btn--ghost" @click="openDetail(order)">查看详情</button>
@@ -529,9 +700,149 @@ onMounted(() => {
               <button
                 v-if="detailOrder.status === 'shipped'"
                 class="mo-btn mo-btn--primary"
-                @click="confirmReceipt(detailOrder); closeDetail()"
+                @click="showConfirmModal(detailOrder); closeDetail()"
               >
                 确认收货
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 确认收货弹窗 -->
+    <transition name="modal">
+      <div v-if="confirmVisible" class="mo-modal-overlay" @click.self="closeConfirmModal">
+        <div class="mo-modal mo-modal--sm">
+          <div class="mo-modal__header">
+            <h2>确认收货</h2>
+            <button class="mo-modal__close" @click="closeConfirmModal">×</button>
+          </div>
+          <div class="mo-modal__body">
+            <div class="mo-confirm-body">
+              <div class="mo-confirm-icon">✓</div>
+              <p class="mo-confirm-text">确认已收到商品并完成订单吗？</p>
+              <p class="mo-confirm-hint">确认后订单状态将变为“已完成”，您也可以稍后对该商品进行评价。</p>
+            </div>
+            <div class="mo-confirm-actions">
+              <button class="mo-btn mo-btn--ghost" @click="closeConfirmModal">再等等</button>
+              <button class="mo-btn mo-btn--primary" @click="executeConfirmReceipt">确认收货</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 评价弹窗 -->
+    <transition name="modal">
+      <div v-if="reviewVisible" class="mo-modal-overlay" @click.self="closeReviewModal">
+        <div class="mo-modal mo-modal--md">
+          <div class="mo-modal__header">
+            <h2>发表评价</h2>
+            <button class="mo-modal__close" @click="closeReviewModal">×</button>
+          </div>
+          <div v-if="reviewLoading" class="mo-modal__loading">
+            <div class="mo-loading__spinner"></div>
+            <p>提交评价中...</p>
+          </div>
+          <div v-else class="mo-modal__body">
+            <!-- 选择评价商品 -->
+            <div v-if="reviewOrder && reviewOrder.items.length > 1" class="mo-review-section">
+              <div class="mo-review-section__title">选择要评价的商品</div>
+              <div class="mo-review-products">
+                <div
+                  v-for="item in reviewOrder.items"
+                  :key="item.product_id"
+                  :class="['mo-review-product', { active: reviewProduct?.product_id === item.product_id }]"
+                  @click="selectReviewProduct(item)"
+                >
+                  <img v-if="item.image_url" :src="item.image_url" :alt="item.product_name" />
+                  <div v-else class="mo-review-product__noimg">无图</div>
+                  <span class="mo-review-product__name">{{ item.product_name }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 评分 -->
+            <div class="mo-review-section">
+              <div class="mo-review-section__title">商品评分</div>
+              <div class="mo-review-rating">
+                <button
+                  v-for="n in 5"
+                  :key="n"
+                  :class="['mo-review-star', { active: n <= reviewForm.rating }]"
+                  @click="reviewForm.rating = n"
+                >
+                  ★
+                </button>
+                <span class="mo-review-rating__text">{{ reviewForm.rating }} 分</span>
+              </div>
+            </div>
+
+            <!-- 评价内容 -->
+            <div class="mo-review-section">
+              <div class="mo-review-section__title">评价内容</div>
+              <textarea
+                v-model="reviewForm.content"
+                class="mo-review-textarea"
+                rows="4"
+                placeholder="分享您的使用体验，帮助其他买家做出选择（选填）"
+              ></textarea>
+            </div>
+
+            <!-- 上传图片 -->
+            <div class="mo-review-section">
+              <div class="mo-review-section__title">
+                上传图片
+                <span class="mo-review-section__hint">（选填，最多 6 张）</span>
+              </div>
+              <div class="mo-review-media">
+                <div v-for="(img, idx) in reviewImages" :key="idx" class="mo-review-media__item">
+                  <img :src="img.url" />
+                  <div v-if="img.uploading" class="mo-review-media__mask">
+                    <div class="mo-loading__spinner"></div>
+                  </div>
+                  <div v-if="img.error" class="mo-review-media__error" :title="img.error">!</div>
+                  <button class="mo-review-media__remove" @click="removeReviewImage(img.url)">×</button>
+                </div>
+                <label v-if="reviewImages.length < 6" class="mo-review-media__add">
+                  <input type="file" accept="image/*" multiple @change="handleReviewImageSelect" />
+                  <span>+</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- 上传视频 -->
+            <div class="mo-review-section">
+              <div class="mo-review-section__title">
+                上传视频
+                <span class="mo-review-section__hint">（选填，最多 3 个）</span>
+              </div>
+              <div class="mo-review-media">
+                <div v-for="(video, idx) in reviewVideos" :key="idx" class="mo-review-media__item mo-review-media__item--video">
+                  <video :src="video.url" controls></video>
+                  <div v-if="video.uploading" class="mo-review-media__mask">
+                    <div class="mo-loading__spinner"></div>
+                  </div>
+                  <div v-if="video.error" class="mo-review-media__error" :title="video.error">!</div>
+                  <button class="mo-review-media__remove" @click="removeReviewVideo(video.url)">×</button>
+                </div>
+                <label v-if="reviewVideos.length < 3" class="mo-review-media__add">
+                  <input type="file" accept="video/*" multiple @change="handleReviewVideoSelect" />
+                  <span>+</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="mo-review-actions">
+              <button class="mo-btn mo-btn--ghost" @click="skipReview">暂不评价</button>
+              <button
+                class="mo-btn mo-btn--primary"
+                :disabled="reviewUploading"
+                @click="submitReview"
+              >
+                提交评价
               </button>
             </div>
           </div>
@@ -1143,6 +1454,292 @@ onMounted(() => {
 .mo-detail-actions .mo-btn {
   padding: 10px 28px;
   font-size: 14px;
+}
+
+/* 确认收货 / 评价弹窗尺寸 */
+.mo-modal--sm {
+  width: min(420px, 100%);
+}
+
+.mo-modal--md {
+  width: min(560px, 100%);
+}
+
+/* 确认收货 */
+.mo-confirm-body {
+  text-align: center;
+  padding: 16px 8px 24px;
+}
+
+.mo-confirm-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--green), #10b981);
+  color: #fff;
+  font-size: 32px;
+  display: inline-grid;
+  place-items: center;
+  margin-bottom: 16px;
+  box-shadow: 0 12px 30px rgba(52, 211, 153, 0.25);
+}
+
+.mo-confirm-text {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.mo-confirm-hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.mo-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+/* 评价 */
+.mo-review-section {
+  margin-bottom: 22px;
+}
+
+.mo-review-section__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 12px;
+  padding-left: 10px;
+  border-left: 3px solid var(--brand);
+}
+
+.mo-review-section__hint {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+.mo-review-products {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mo-review-product {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  cursor: pointer;
+  transition: all 0.2s;
+  max-width: 220px;
+}
+
+.mo-review-product:hover,
+.mo-review-product.active {
+  border-color: var(--brand);
+  background: rgba(155, 135, 245, 0.06);
+}
+
+.mo-review-product img,
+.mo-review-product__noimg {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #f8f4ef;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mo-review-product__name {
+  font-size: 13px;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mo-review-rating {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mo-review-star {
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: transparent;
+  font-size: 26px;
+  color: #e5e7eb;
+  cursor: pointer;
+  transition: color 0.2s, transform 0.15s;
+  line-height: 1;
+}
+
+.mo-review-star:hover,
+.mo-review-star.active {
+  color: var(--yellow);
+}
+
+.mo-review-star:hover {
+  transform: scale(1.1);
+}
+
+.mo-review-rating__text {
+  font-size: 14px;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+.mo-review-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--ink);
+  resize: vertical;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.mo-review-textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(155, 135, 245, 0.1);
+}
+
+.mo-review-media {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mo-review-media__item {
+  width: 88px;
+  height: 88px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  position: relative;
+  background: #f8f4ef;
+}
+
+.mo-review-media__item--video {
+  width: 140px;
+  height: 88px;
+}
+
+.mo-review-media__item img,
+.mo-review-media__item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mo-review-media__mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mo-review-media__mask .mo-loading__spinner {
+  width: 24px;
+  height: 24px;
+  border-width: 2px;
+  margin: 0;
+}
+
+.mo-review-media__error {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mo-review-media__remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.mo-review-media__remove:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.mo-review-media__add {
+  width: 88px;
+  height: 88px;
+  border: 1px dashed var(--brand);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--brand);
+  font-size: 28px;
+  background: rgba(155, 135, 245, 0.04);
+  transition: background 0.2s;
+}
+
+.mo-review-media__add:hover {
+  background: rgba(155, 135, 245, 0.1);
+}
+
+.mo-review-media__add input {
+  display: none;
+}
+
+.mo-review-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
 }
 
 /* 弹窗过渡 */

@@ -205,12 +205,6 @@ async function uploadAndAnalyze(file: File) {
 
 // === 数据库商品选择相关方法 ===
 
-/** 格式化商品价格展示 */
-function formatProductPrice(price: number | null | undefined): string {
-  if (price === null || price === undefined || price === 0) return ''
-  return ` ¥${price}`
-}
-
 /** 从数据库获取商品分类列表 */
 async function fetchCategories() {
   loadingCategories.value = true

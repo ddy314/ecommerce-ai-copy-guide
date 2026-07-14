@@ -56,10 +56,56 @@ const navigateToProduct = inject<(productId: number) => void>('navigateToProduct
 const loading = ref(true)
 const userInfo = ref<UserInfo | null>(null)
 
-// 编辑资料弹窗
+// ---------- 编辑资料弹窗
 const editVisible = ref(false)
 const editForm = ref({ nickname: '', phone: '', email: '' })
 const editLoading = ref(false)
+
+// ---------- 头像上传
+const avatarInput = ref<HTMLInputElement | null>(null)
+const avatarLoading = ref(false)
+
+function triggerAvatarUpload() {
+  avatarInput.value?.click()
+}
+
+async function handleAvatarChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  avatarLoading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const token = localStorage.getItem('token')
+    const response = await fetch(`${API_BASE}/api/auth/avatar`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    const data = await response.json()
+    userInfo.value = data.user || { ...userInfo.value, avatar: data.avatar }
+    // 更新 localStorage
+    const stored = localStorage.getItem('userInfo')
+    if (stored) {
+      const info = JSON.parse(stored)
+      info.avatar = data.avatar
+      localStorage.setItem('userInfo', JSON.stringify(info))
+    }
+    showToast('头像上传成功')
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '头像上传失败', 'error')
+  } finally {
+    avatarLoading.value = false
+    if (input) input.value = ''
+  }
+}
 
 // 地址管理
 const addresses = ref<Address[]>([])
@@ -376,13 +422,22 @@ onMounted(() => {
     <template v-else>
       <!-- 用户信息卡片 -->
       <div class="up-user-card">
-        <div class="up-user-card__avatar">
+        <div class="up-user-card__avatar" @click="triggerAvatarUpload">
           <img
             v-if="userInfo?.avatar"
             :src="userInfo.avatar"
             :alt="userInfo.nickname"
           />
           <span v-else>{{ getAvatarChar() }}</span>
+          <div v-if="avatarLoading" class="up-user-card__avatar-loading">上传中</div>
+          <div v-else class="up-user-card__avatar-tip">点击上传</div>
+          <input
+            ref="avatarInput"
+            type="file"
+            accept="image/*"
+            class="hidden"
+            @change="handleAvatarChange"
+          />
         </div>
         <div class="up-user-card__info">
           <h2 class="up-user-card__name">{{ userInfo?.nickname || userInfo?.username }}</h2>
@@ -743,6 +798,31 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.up-user-card__avatar-tip,
+.up-user-card__avatar-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.2s;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.up-user-card__avatar:hover .up-user-card__avatar-tip {
+  opacity: 1;
+}
+
+.up-user-card__avatar-loading {
+  opacity: 1;
 }
 
 .up-user-card__info {

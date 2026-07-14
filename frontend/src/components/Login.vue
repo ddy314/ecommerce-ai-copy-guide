@@ -1,5 +1,16 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import {
+  SparklesIcon,
+  ShoppingBagIcon,
+  ChatBubbleLeftRightIcon,
+  ChartBarIcon,
+  UserIcon,
+  BuildingStorefrontIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  ArrowPathIcon,
+} from '@heroicons/vue/24/outline'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -89,17 +100,16 @@ const forgotErrors = reactive({
   confirmPassword: '',
 })
 
-// 左侧功能特色列表
 const features = [
-  { icon: '文', title: 'AI 商品文案生成', desc: '一键生成标题、卖点、详情页文案和广告语，支撑商品上架与营销素材。' },
-  { icon: '导', title: '智能导购推荐', desc: '根据用户预算、场景与偏好，生成可解释的推荐理由与替代方案。' },
-  { icon: '评', title: '评论情感分析', desc: '提取好评词、差评痛点与可落地的商品优化建议。' },
-  { icon: '播', title: '直播脚本生成', desc: '按直播节奏输出开场、讲解、互动与转化话术。' },
+  { icon: SparklesIcon, title: 'AI 商品文案生成', desc: '一键生成标题、卖点、详情页文案和广告语，支撑商品上架与营销素材。' },
+  { icon: ShoppingBagIcon, title: '智能导购推荐', desc: '根据用户预算、场景与偏好，生成可解释的推荐理由与替代方案。' },
+  { icon: ChatBubbleLeftRightIcon, title: 'AI 客服咨询', desc: '结合商品知识与真实评论，7×24 小时智能解答用户疑问。' },
+  { icon: ChartBarIcon, title: '评论情感分析', desc: '提取好评词、差评痛点与可落地的商品优化建议。' },
 ]
 
-const roleTabs: { value: Role; label: string; desc: string }[] = [
-  { value: 'user', label: '普通用户', desc: '浏览商品、智能导购、购物下单' },
-  { value: 'merchant', label: '商家管理员', desc: '商品管理、文案生成、数据分析' },
+const roleTabs: { value: Role; label: string; desc: string; icon: any }[] = [
+  { value: 'user', label: '普通用户', desc: '浏览商品、智能导购、购物下单', icon: UserIcon },
+  { value: 'merchant', label: '商家管理员', desc: '商品管理、文案生成、数据分析', icon: BuildingStorefrontIcon },
 ]
 
 // 切换视图时重置表单与提示
@@ -120,7 +130,6 @@ function switchRole(r: Role) {
   role.value = r
   errorMsg.value = ''
   if (r === 'merchant') {
-    // 商家管理员不允许注册，强制切回登录
     if (viewMode.value === 'register') {
       viewMode.value = 'login'
     }
@@ -261,11 +270,9 @@ async function handleRegister() {
       nickname: registerForm.nickname.trim(),
     })
     successMsg.value = '注册成功，请使用新账号登录'
-    // 自动填充登录账号
     loginForm.username = registerForm.username.trim()
     loginForm.password = ''
     viewMode.value = 'login'
-    // 清空注册表单
     registerForm.username = ''
     registerForm.password = ''
     registerForm.confirmPassword = ''
@@ -295,7 +302,6 @@ function validateForgotStep2(): boolean {
   return !forgotErrors.newPassword && !forgotErrors.confirmPassword
 }
 
-// 第一步：校验账号是否存在
 async function handleCheckUsername() {
   errorMsg.value = ''
   successMsg.value = ''
@@ -305,7 +311,6 @@ async function handleCheckUsername() {
     await request('/api/auth/check-username', {
       username: forgotForm.username.trim(),
     })
-    // 校验通过，进入第二步
     forgotStep.value = 2
     successMsg.value = '账号验证通过，请设置新密码'
   } catch (e) {
@@ -315,7 +320,6 @@ async function handleCheckUsername() {
   }
 }
 
-// 第二步：重置密码
 async function handleResetPassword() {
   errorMsg.value = ''
   successMsg.value = ''
@@ -327,10 +331,8 @@ async function handleResetPassword() {
       new_password: forgotForm.newPassword,
     })
     successMsg.value = '密码重置成功，请使用新密码登录'
-    // 自动填充账号
     loginForm.username = forgotForm.username.trim()
     loginForm.password = ''
-    // 重置找回流程
     forgotStep.value = 1
     forgotForm.username = ''
     forgotForm.newPassword = ''
@@ -344,24 +346,45 @@ async function handleResetPassword() {
 }
 
 const canRegister = computed(() => role.value === 'user')
+
+const headline = computed(() => {
+  if (viewMode.value === 'login') return '欢迎回来'
+  if (viewMode.value === 'register') return '创建新账号'
+  return '找回密码'
+})
 </script>
 
 <template>
   <div class="login-page">
+    <!-- 灵动背景 -->
+    <div class="ambient">
+      <div class="orb orb--1"></div>
+      <div class="orb orb--2"></div>
+      <div class="orb orb--3"></div>
+      <div class="grid-overlay"></div>
+    </div>
+
     <div class="login-container">
       <!-- 左侧：系统介绍 -->
       <aside class="intro-panel">
-        <div class="intro-inner">
-          <p class="eyebrow">AI Commerce Assistant</p>
-          <h1 class="intro-title">电商AI商品文案生成<br />与智能导购助手</h1>
+        <div class="intro-glass">
+          <div class="intro-badge">
+            <SparklesIcon class="intro-badge__icon" />
+            <span>AI Commerce Assistant</span>
+          </div>
+          <h1 class="intro-title">
+            电商 AI 商品文案<br />与智能导购助手
+          </h1>
           <p class="intro-lead">
-            基于真实电商数据的 AI 助手系统：Scrapy 爬取京东商品与评论，PostgreSQL 存储，
-            Redis 缓存，AI 大模型驱动文案生成、导购推荐、情感分析与直播脚本。
+            基于真实电商数据的 AI 助手系统，集文案生成、智能导购、评论分析、AI 客服于一体，
+            为商家与用户打造更聪明的电商体验。
           </p>
 
           <div class="feature-list">
             <div v-for="f in features" :key="f.title" class="feature-item">
-              <span class="feature-icon">{{ f.icon }}</span>
+              <div class="feature-icon">
+                <component :is="f.icon" class="w-5 h-5" />
+              </div>
               <div class="feature-text">
                 <h3>{{ f.title }}</h3>
                 <p>{{ f.desc }}</p>
@@ -370,7 +393,7 @@ const canRegister = computed(() => role.value === 'user')
           </div>
         </div>
         <div class="intro-footer">
-          <span class="dot dot--green"></span>
+          <span class="status-dot"></span>
           <span>双端架构 · 普通用户前台 + 商家管理后台</span>
         </div>
       </aside>
@@ -378,11 +401,8 @@ const canRegister = computed(() => role.value === 'user')
       <!-- 右侧：登录卡片 -->
       <section class="auth-panel">
         <div class="auth-card">
-          <!-- 视图切换标题 -->
           <div class="auth-header">
-            <h2>
-              {{ viewMode === 'login' ? '欢迎登录' : viewMode === 'register' ? '注册新账号' : '找回密码' }}
-            </h2>
+            <h2>{{ headline }}</h2>
             <p class="auth-subtitle">
               {{ viewMode === 'login'
                 ? '请选择身份并输入账号密码'
@@ -392,7 +412,7 @@ const canRegister = computed(() => role.value === 'user')
             </p>
           </div>
 
-          <!-- 身份切换 tab（仅登录与注册入口展示） -->
+          <!-- 身份切换 tab -->
           <div v-if="viewMode === 'login'" class="role-tabs">
             <button
               v-for="tab in roleTabs"
@@ -400,30 +420,43 @@ const canRegister = computed(() => role.value === 'user')
               :class="['role-tab', { active: role === tab.value }]"
               @click="switchRole(tab.value)"
             >
-              <span class="role-tab-label">{{ tab.label }}</span>
-              <span class="role-tab-desc">{{ tab.desc }}</span>
+              <component :is="tab.icon" class="role-tab__icon" />
+              <div class="role-tab__text">
+                <span class="role-tab-label">{{ tab.label }}</span>
+                <span class="role-tab-desc">{{ tab.desc }}</span>
+              </div>
             </button>
           </div>
 
           <!-- 全局提示 -->
-          <div v-if="errorMsg" class="alert alert--error">{{ errorMsg }}</div>
-          <div v-if="successMsg" class="alert alert--success">{{ successMsg }}</div>
+          <transition name="slide-down">
+            <div v-if="errorMsg" class="alert alert--error">
+              <span>{{ errorMsg }}</span>
+            </div>
+          </transition>
+          <transition name="slide-down">
+            <div v-if="successMsg" class="alert alert--success">
+              <span>{{ successMsg }}</span>
+            </div>
+          </transition>
 
           <!-- 登录表单 -->
           <form v-if="viewMode === 'login'" class="auth-form" @submit.prevent="handleLogin">
             <div class="form-group">
               <label>账号</label>
-              <input
-                v-model="loginForm.username"
-                type="text"
-                placeholder="请输入账号"
-                :class="{ invalid: loginErrors.username }"
-              />
+              <div class="input-wrap">
+                <input
+                  v-model="loginForm.username"
+                  type="text"
+                  placeholder="请输入账号"
+                  :class="{ invalid: loginErrors.username }"
+                />
+              </div>
               <span v-if="loginErrors.username" class="field-error">{{ loginErrors.username }}</span>
             </div>
             <div class="form-group">
               <label>密码</label>
-              <div class="password-wrapper">
+              <div class="input-wrap password-wrapper">
                 <input
                   v-model="loginForm.password"
                   :type="showLoginPassword ? 'text' : 'password'"
@@ -434,41 +467,31 @@ const canRegister = computed(() => role.value === 'user')
                   type="button"
                   class="password-toggle"
                   @click="showLoginPassword = !showLoginPassword"
-                  :aria-label="showLoginPassword ? '隐藏密码' : '显示密码'"
                 >
-                  <span class="eye-icon">{{ showLoginPassword ? '🙈' : '👁' }}</span>
+                  <component :is="showLoginPassword ? EyeSlashIcon : EyeIcon" class="w-5 h-5" />
                 </button>
               </div>
               <span v-if="loginErrors.password" class="field-error">{{ loginErrors.password }}</span>
             </div>
 
-            <!-- 记住密码 -->
             <div class="remember-row">
               <label class="checkbox-label">
-                <input
-                  v-model="rememberPassword"
-                  type="checkbox"
-                  class="checkbox-input"
-                />
+                <input v-model="rememberPassword" type="checkbox" class="checkbox-input" />
                 <span class="checkbox-custom"></span>
                 <span class="checkbox-text">记住密码</span>
               </label>
             </div>
 
             <button type="submit" class="submit-btn" :disabled="loading">
-              {{ loading ? '登录中...' : '登 录' }}
+              <ArrowPathIcon v-if="loading" class="w-4 h-4 animate-spin" />
+              <span>{{ loading ? '登录中...' : '登 录' }}</span>
             </button>
 
             <div class="form-links">
               <button type="button" class="link-btn" @click="switchMode('forgot')">
                 忘记密码？
               </button>
-              <button
-                v-if="canRegister"
-                type="button"
-                class="link-btn"
-                @click="switchMode('register')"
-              >
+              <button v-if="canRegister" type="button" class="link-btn" @click="switchMode('register')">
                 没有账号？立即注册
               </button>
             </div>
@@ -478,66 +501,41 @@ const canRegister = computed(() => role.value === 'user')
           <form v-else-if="viewMode === 'register'" class="auth-form" @submit.prevent="handleRegister">
             <div class="form-group">
               <label>账号</label>
-              <input
-                v-model="registerForm.username"
-                type="text"
-                placeholder="请设置登录账号"
-                :class="{ invalid: registerErrors.username }"
-              />
+              <div class="input-wrap">
+                <input v-model="registerForm.username" type="text" placeholder="请设置登录账号" :class="{ invalid: registerErrors.username }" />
+              </div>
               <span v-if="registerErrors.username" class="field-error">{{ registerErrors.username }}</span>
             </div>
             <div class="form-group">
               <label>昵称</label>
-              <input
-                v-model="registerForm.nickname"
-                type="text"
-                placeholder="请输入昵称"
-                :class="{ invalid: registerErrors.nickname }"
-              />
+              <div class="input-wrap">
+                <input v-model="registerForm.nickname" type="text" placeholder="请输入昵称" :class="{ invalid: registerErrors.nickname }" />
+              </div>
               <span v-if="registerErrors.nickname" class="field-error">{{ registerErrors.nickname }}</span>
             </div>
             <div class="form-group">
               <label>密码</label>
-              <div class="password-wrapper">
-                <input
-                  v-model="registerForm.password"
-                  :type="showRegisterPassword ? 'text' : 'password'"
-                  placeholder="密码长度不少于 6 位"
-                  :class="{ invalid: registerErrors.password }"
-                />
-                <button
-                  type="button"
-                  class="password-toggle"
-                  @click="showRegisterPassword = !showRegisterPassword"
-                  :aria-label="showRegisterPassword ? '隐藏密码' : '显示密码'"
-                >
-                  <span class="eye-icon">{{ showRegisterPassword ? '🙈' : '👁' }}</span>
+              <div class="input-wrap password-wrapper">
+                <input v-model="registerForm.password" :type="showRegisterPassword ? 'text' : 'password'" placeholder="密码长度不少于 6 位" :class="{ invalid: registerErrors.password }" />
+                <button type="button" class="password-toggle" @click="showRegisterPassword = !showRegisterPassword">
+                  <component :is="showRegisterPassword ? EyeSlashIcon : EyeIcon" class="w-5 h-5" />
                 </button>
               </div>
               <span v-if="registerErrors.password" class="field-error">{{ registerErrors.password }}</span>
             </div>
             <div class="form-group">
               <label>确认密码</label>
-              <div class="password-wrapper">
-                <input
-                  v-model="registerForm.confirmPassword"
-                  :type="showRegisterConfirmPassword ? 'text' : 'password'"
-                  placeholder="请再次输入密码"
-                  :class="{ invalid: registerErrors.confirmPassword }"
-                />
-                <button
-                  type="button"
-                  class="password-toggle"
-                  @click="showRegisterConfirmPassword = !showRegisterConfirmPassword"
-                  :aria-label="showRegisterConfirmPassword ? '隐藏密码' : '显示密码'"
-                >
-                  <span class="eye-icon">{{ showRegisterConfirmPassword ? '🙈' : '👁' }}</span>
+              <div class="input-wrap password-wrapper">
+                <input v-model="registerForm.confirmPassword" :type="showRegisterConfirmPassword ? 'text' : 'password'" placeholder="请再次输入密码" :class="{ invalid: registerErrors.confirmPassword }" />
+                <button type="button" class="password-toggle" @click="showRegisterConfirmPassword = !showRegisterConfirmPassword">
+                  <component :is="showRegisterConfirmPassword ? EyeSlashIcon : EyeIcon" class="w-5 h-5" />
                 </button>
               </div>
               <span v-if="registerErrors.confirmPassword" class="field-error">{{ registerErrors.confirmPassword }}</span>
             </div>
             <button type="submit" class="submit-btn" :disabled="loading">
-              {{ loading ? '注册中...' : '注 册' }}
+              <ArrowPathIcon v-if="loading" class="w-4 h-4 animate-spin" />
+              <span>{{ loading ? '注册中...' : '注 册' }}</span>
             </button>
             <div class="form-links">
               <button type="button" class="link-btn" @click="switchMode('login')">
@@ -548,78 +546,56 @@ const canRegister = computed(() => role.value === 'user')
 
           <!-- 找回密码表单 -->
           <form v-else class="auth-form" @submit.prevent="forgotStep === 1 ? handleCheckUsername() : handleResetPassword()">
-            <!-- 步骤指示器 -->
             <div class="step-indicator">
-              <span :class="['step', { active: forgotStep >= 1, done: forgotStep > 1 }]">
-                <i>1</i> 验证账号
-              </span>
-              <span class="step-line" :class="{ active: forgotStep > 1 }"></span>
-              <span :class="['step', { active: forgotStep >= 2 }]">
-                <i>2</i> 重置密码
-              </span>
+              <div :class="['step', { active: forgotStep >= 1, done: forgotStep > 1 }]">
+                <span class="step-num">1</span>
+                <span class="step-label">验证账号</span>
+              </div>
+              <div class="step-line" :class="{ active: forgotStep > 1 }"></div>
+              <div :class="['step', { active: forgotStep >= 2 }]">
+                <span class="step-num">2</span>
+                <span class="step-label">重置密码</span>
+              </div>
             </div>
 
-            <!-- 第一步：输入账号 -->
             <template v-if="forgotStep === 1">
               <div class="form-group">
                 <label>账号</label>
-                <input
-                  v-model="forgotForm.username"
-                  type="text"
-                  placeholder="请输入需要找回的账号"
-                  :class="{ invalid: forgotErrors.username }"
-                />
+                <div class="input-wrap">
+                  <input v-model="forgotForm.username" type="text" placeholder="请输入需要找回的账号" :class="{ invalid: forgotErrors.username }" />
+                </div>
                 <span v-if="forgotErrors.username" class="field-error">{{ forgotErrors.username }}</span>
               </div>
               <button type="submit" class="submit-btn" :disabled="loading">
-                {{ loading ? '验证中...' : '下一步' }}
+                <ArrowPathIcon v-if="loading" class="w-4 h-4 animate-spin" />
+                <span>{{ loading ? '验证中...' : '下一步' }}</span>
               </button>
             </template>
 
-            <!-- 第二步：设置新密码 -->
             <template v-else>
               <div class="form-group">
                 <label>新密码</label>
-                <div class="password-wrapper">
-                  <input
-                    v-model="forgotForm.newPassword"
-                    :type="showForgotPassword ? 'text' : 'password'"
-                    placeholder="密码长度不少于 6 位"
-                    :class="{ invalid: forgotErrors.newPassword }"
-                  />
-                  <button
-                    type="button"
-                    class="password-toggle"
-                    @click="showForgotPassword = !showForgotPassword"
-                    :aria-label="showForgotPassword ? '隐藏密码' : '显示密码'"
-                  >
-                    <span class="eye-icon">{{ showForgotPassword ? '🙈' : '👁' }}</span>
+                <div class="input-wrap password-wrapper">
+                  <input v-model="forgotForm.newPassword" :type="showForgotPassword ? 'text' : 'password'" placeholder="密码长度不少于 6 位" :class="{ invalid: forgotErrors.newPassword }" />
+                  <button type="button" class="password-toggle" @click="showForgotPassword = !showForgotPassword">
+                    <component :is="showForgotPassword ? EyeSlashIcon : EyeIcon" class="w-5 h-5" />
                   </button>
                 </div>
                 <span v-if="forgotErrors.newPassword" class="field-error">{{ forgotErrors.newPassword }}</span>
               </div>
               <div class="form-group">
                 <label>确认新密码</label>
-                <div class="password-wrapper">
-                  <input
-                    v-model="forgotForm.confirmPassword"
-                    :type="showForgotConfirmPassword ? 'text' : 'password'"
-                    placeholder="请再次输入新密码"
-                    :class="{ invalid: forgotErrors.confirmPassword }"
-                  />
-                  <button
-                    type="button"
-                    class="password-toggle"
-                    @click="showForgotConfirmPassword = !showForgotConfirmPassword"
-                    :aria-label="showForgotConfirmPassword ? '隐藏密码' : '显示密码'"
-                  >
-                    <span class="eye-icon">{{ showForgotConfirmPassword ? '🙈' : '👁' }}</span>
+                <div class="input-wrap password-wrapper">
+                  <input v-model="forgotForm.confirmPassword" :type="showForgotConfirmPassword ? 'text' : 'password'" placeholder="请再次输入新密码" :class="{ invalid: forgotErrors.confirmPassword }" />
+                  <button type="button" class="password-toggle" @click="showForgotConfirmPassword = !showForgotConfirmPassword">
+                    <component :is="showForgotConfirmPassword ? EyeSlashIcon : EyeIcon" class="w-5 h-5" />
                   </button>
                 </div>
                 <span v-if="forgotErrors.confirmPassword" class="field-error">{{ forgotErrors.confirmPassword }}</span>
               </div>
               <button type="submit" class="submit-btn" :disabled="loading">
-                {{ loading ? '重置中...' : '重置密码' }}
+                <ArrowPathIcon v-if="loading" class="w-4 h-4 animate-spin" />
+                <span>{{ loading ? '重置中...' : '重置密码' }}</span>
               </button>
             </template>
 
@@ -642,53 +618,92 @@ const canRegister = computed(() => role.value === 'user')
   align-items: center;
   justify-content: center;
   padding: 32px 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #f8f8fc 0%, #f0f4ff 50%, #fdf8f6 100%);
   position: relative;
   overflow: hidden;
 }
 
-.login-page::before {
-  content: '';
+/* 灵动背景 */
+.ambient {
   position: absolute;
-  width: 200%;
-  height: 200%;
-  background: radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px);
-  background-size: 50px 50px;
-  animation: backgroundMove 20s linear infinite;
-  opacity: 0.3;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
 }
 
-@keyframes backgroundMove {
-  0% {
-    transform: translate(0, 0);
-  }
-  100% {
-    transform: translate(50px, 50px);
-  }
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  animation: floatOrb 18s ease-in-out infinite;
+}
+
+.orb--1 {
+  width: 520px;
+  height: 520px;
+  top: -160px;
+  left: -120px;
+  background: radial-gradient(circle, rgba(155, 135, 245, 0.55), transparent 70%);
+}
+
+.orb--2 {
+  width: 440px;
+  height: 440px;
+  bottom: -120px;
+  right: -80px;
+  background: radial-gradient(circle, rgba(147, 197, 253, 0.55), transparent 70%);
+  animation-delay: -6s;
+}
+
+.orb--3 {
+  width: 320px;
+  height: 320px;
+  top: 45%;
+  left: 55%;
+  background: radial-gradient(circle, rgba(253, 230, 138, 0.45), transparent 70%);
+  animation-delay: -12s;
+}
+
+@keyframes floatOrb {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(40px, -30px) scale(1.06); }
+  66% { transform: translate(-30px, 20px) scale(0.96); }
+}
+
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(155, 135, 245, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(155, 135, 245, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 0%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 0%, transparent 70%);
 }
 
 .login-container {
-  width: min(1100px, 100%);
+  width: min(1120px, 100%);
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  border-radius: 24px;
+  grid-template-columns: 1.15fr 0.85fr;
+  border-radius: 32px;
   overflow: hidden;
-  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.25), 0 10px 40px rgba(0, 0, 0, 0.15);
-  min-height: 680px;
-  animation: fadeInUp 0.6s ease-out;
+  min-height: 720px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(155, 135, 245, 0.14);
+  box-shadow:
+    0 24px 80px rgba(155, 135, 245, 0.14),
+    0 8px 32px rgba(31, 41, 55, 0.04);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  animation: cardIn 0.7s cubic-bezier(0.22, 1, 0.36, 1);
   position: relative;
   z-index: 1;
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(40px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(36px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 /* 左侧介绍 */
@@ -698,84 +713,98 @@ const canRegister = computed(() => role.value === 'user')
   flex-direction: column;
   justify-content: space-between;
   padding: clamp(40px, 5vw, 64px);
-  color: #fff;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #1f2937;
+  background: linear-gradient(135deg, rgba(237, 233, 254, 0.7) 0%, rgba(219, 234, 254, 0.5) 100%);
   overflow: hidden;
 }
 
 .intro-panel::before {
   position: absolute;
-  top: -150px;
-  right: -150px;
-  width: 400px;
-  height: 400px;
+  top: -120px;
+  right: -120px;
+  width: 360px;
+  height: 360px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(155, 135, 245, 0.18);
   content: '';
-  animation: float 10s ease-in-out infinite;
-  filter: blur(2px);
+  filter: blur(60px);
 }
 
 .intro-panel::after {
   position: absolute;
-  bottom: -120px;
-  left: -100px;
-  width: 300px;
-  height: 300px;
+  bottom: -100px;
+  left: -80px;
+  width: 280px;
+  height: 280px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(147, 197, 253, 0.2);
   content: '';
-  animation: float 12s ease-in-out infinite reverse;
-  filter: blur(2px);
+  filter: blur(60px);
 }
 
-@keyframes float {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
-  }
-  50% {
-    transform: translate(30px, -30px) scale(1.05);
-  }
-}
-
-.intro-inner {
+.intro-glass {
   position: relative;
   z-index: 1;
 }
 
-.eyebrow {
-  margin: 0 0 18px;
+.intro-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(155, 135, 245, 0.2);
+  color: var(--brand-dark);
   font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.95);
+  margin-bottom: 24px;
+  box-shadow: 0 2px 12px rgba(155, 135, 245, 0.08);
+}
+
+.intro-badge__icon {
+  width: 16px;
+  height: 16px;
 }
 
 .intro-title {
   margin: 0;
   font-size: clamp(28px, 3.2vw, 40px);
-  line-height: 1.15;
+  line-height: 1.18;
   letter-spacing: -0.03em;
+  color: #1f2937;
 }
 
 .intro-lead {
-  margin: 20px 0 0;
+  margin: 18px 0 0;
   font-size: 15px;
-  line-height: 1.75;
-  color: rgba(255, 255, 255, 0.92);
+  line-height: 1.8;
+  color: #4b5563;
+  max-width: 440px;
 }
 
 .feature-list {
   display: grid;
-  gap: 16px;
-  margin-top: 32px;
+  gap: 14px;
+  margin-top: 36px;
 }
 
 .feature-item {
   display: flex;
   gap: 14px;
   align-items: flex-start;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(155, 135, 245, 0.12);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.feature-item:hover {
+  transform: translateX(4px);
+  box-shadow: 0 8px 24px rgba(155, 135, 245, 0.1);
 }
 
 .feature-icon {
@@ -785,23 +814,23 @@ const canRegister = computed(() => role.value === 'user')
   height: 40px;
   place-items: center;
   border-radius: 12px;
-  font-weight: 800;
-  font-size: 16px;
-  color: var(--brand-dark);
-  background: rgba(255, 250, 240, 0.92);
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+  box-shadow: 0 6px 16px rgba(155, 135, 245, 0.28);
 }
 
 .feature-text h3 {
   margin: 0 0 4px;
   font-size: 15px;
   font-weight: 700;
+  color: #1f2937;
 }
 
 .feature-text p {
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.9);
+  color: #6b7280;
 }
 
 .intro-footer {
@@ -809,22 +838,18 @@ const canRegister = computed(() => role.value === 'user')
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-top: 24px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.9);
+  color: #6b7280;
 }
 
-.dot {
+.status-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--yellow);
-}
-
-.dot--green {
-  background: #6fe0a8;
-  box-shadow: 0 0 0 4px rgba(111, 224, 168, 0.25);
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.22);
 }
 
 /* 右侧登录卡片 */
@@ -832,30 +857,36 @@ const canRegister = computed(() => role.value === 'user')
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(28px, 4vw, 48px);
-  background: var(--panel);
+  padding: clamp(32px, 4vw, 48px);
+  background: rgba(255, 255, 255, 0.78);
 }
 
 .auth-card {
   width: 100%;
   max-width: 380px;
+  animation: fadeIn 0.5s ease 0.2s both;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .auth-header {
-  margin-bottom: 24px;
+  margin-bottom: 26px;
 }
 
 .auth-header h2 {
   margin: 0 0 8px;
-  font-size: 26px;
+  font-size: 28px;
   letter-spacing: -0.02em;
-  color: var(--ink);
+  color: #1f2937;
 }
 
 .auth-subtitle {
   margin: 0;
   font-size: 14px;
-  color: var(--muted);
+  color: #6b7280;
   line-height: 1.6;
 }
 
@@ -869,12 +900,12 @@ const canRegister = computed(() => role.value === 'user')
 
 .role-tab {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: transparent;
+  border: 1px solid rgba(155, 135, 245, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   text-align: left;
   transition: all 0.2s;
@@ -882,45 +913,73 @@ const canRegister = computed(() => role.value === 'user')
 
 .role-tab:hover {
   border-color: var(--brand);
+  background: rgba(155, 135, 245, 0.06);
 }
 
 .role-tab.active {
   border-color: var(--brand);
-  background: rgba(217, 95, 45, 0.08);
-  box-shadow: 0 0 0 1px var(--brand) inset;
+  background: rgba(155, 135, 245, 0.1);
+  box-shadow: 0 0 0 1px var(--brand) inset, 0 6px 18px rgba(155, 135, 245, 0.12);
+}
+
+.role-tab__icon {
+  width: 20px;
+  height: 20px;
+  color: var(--brand);
+  flex-shrink: 0;
+}
+
+.role-tab__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .role-tab-label {
   font-weight: 700;
   font-size: 14px;
-  color: var(--brand-dark);
+  color: #1f2937;
 }
 
 .role-tab-desc {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.4;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.3;
 }
 
 /* 全局提示 */
 .alert {
-  padding: 10px 14px;
-  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-radius: 12px;
   font-size: 13px;
   margin-bottom: 16px;
   line-height: 1.5;
 }
 
 .alert--error {
-  background: #fdeceb;
-  color: #c0392b;
-  border: 1px solid rgba(192, 57, 43, 0.2);
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid rgba(185, 28, 28, 0.14);
 }
 
 .alert--success {
-  background: #e8f6ee;
-  color: var(--green);
-  border: 1px solid rgba(31, 138, 91, 0.2);
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid rgba(21, 128, 61, 0.14);
+}
+
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition: all 0.25s ease;
+}
+
+.slide-down-enter-from,
+.slide-down-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 /* 表单 */
@@ -939,50 +998,56 @@ const canRegister = computed(() => role.value === 'user')
 .form-group label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--ink);
+  color: #374151;
 }
 
-.form-group input {
-  padding: 11px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  font-size: 14px;
-  font-family: inherit;
-  background: rgba(255, 255, 255, 0.7);
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.form-group input:focus {
-  outline: none;
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.12);
-}
-
-.form-group input.invalid {
-  border-color: #c0392b;
-  box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.1);
-}
-
-.field-error {
-  font-size: 12px;
-  color: #c0392b;
-}
-
-/* 密码可见性切换 */
-.password-wrapper {
+.input-wrap {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-.password-wrapper input {
+.input-wrap input {
   width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(155, 135, 245, 0.2);
+  border-radius: 12px;
+  font-size: 14px;
+  font-family: inherit;
+  background: rgba(255, 255, 255, 0.8);
+  color: #1f2937;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.input-wrap input::placeholder {
+  color: #9ca3af;
+}
+
+.input-wrap input:focus {
+  outline: none;
+  border-color: var(--brand);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(155, 135, 245, 0.12);
+}
+
+.input-wrap input.invalid {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.field-error {
+  font-size: 12px;
+  color: #dc2626;
+}
+
+/* 密码可见性切换 */
+.password-wrapper input {
   padding-right: 44px;
 }
 
 .password-toggle {
   position: absolute;
-  right: 8px;
+  right: 10px;
   background: none;
   border: none;
   cursor: pointer;
@@ -990,24 +1055,19 @@ const canRegister = computed(() => role.value === 'user')
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.6;
-  transition: opacity 0.2s;
+  color: #9ca3af;
+  transition: color 0.2s;
 }
 
 .password-toggle:hover {
-  opacity: 1;
-}
-
-.eye-icon {
-  font-size: 18px;
-  user-select: none;
+  color: var(--brand);
 }
 
 /* 记住密码 */
 .remember-row {
   display: flex;
   align-items: center;
-  margin: 4px 0;
+  margin: 2px 0;
 }
 
 .checkbox-label {
@@ -1029,8 +1089,8 @@ const canRegister = computed(() => role.value === 'user')
   position: relative;
   width: 18px;
   height: 18px;
-  border: 2px solid var(--line);
-  border-radius: 4px;
+  border: 2px solid rgba(155, 135, 245, 0.35);
+  border-radius: 5px;
   background: rgba(255, 255, 255, 0.7);
   transition: all 0.2s;
 }
@@ -1047,18 +1107,18 @@ const canRegister = computed(() => role.value === 'user')
   top: 2px;
   width: 4px;
   height: 8px;
-  border: solid #fffaf0;
+  border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 
 .checkbox-input:focus + .checkbox-custom {
-  box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.12);
+  box-shadow: 0 0 0 3px rgba(155, 135, 245, 0.12);
 }
 
 .checkbox-text {
   font-size: 13px;
-  color: var(--ink);
+  color: #4b5563;
   font-weight: 500;
 }
 
@@ -1066,22 +1126,27 @@ const canRegister = computed(() => role.value === 'user')
   margin-top: 4px;
   padding: 13px 20px;
   border: none;
-  border-radius: 12px;
+  border-radius: 14px;
   font-size: 15px;
   font-weight: 600;
-  color: #fffaf0;
-  background: var(--brand);
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
   cursor: pointer;
-  transition: background 0.2s, transform 0.18s;
+  transition: transform 0.18s, box-shadow 0.18s, opacity 0.18s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 8px 22px rgba(155, 135, 245, 0.32);
 }
 
 .submit-btn:hover:not(:disabled) {
-  background: var(--brand-dark);
   transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(155, 135, 245, 0.38);
 }
 
 .submit-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.65;
   cursor: not-allowed;
 }
 
@@ -1098,6 +1163,7 @@ const canRegister = computed(() => role.value === 'user')
   border: none;
   color: var(--brand);
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   padding: 0;
   transition: color 0.2s;
@@ -1112,29 +1178,29 @@ const canRegister = computed(() => role.value === 'user')
 .step-indicator {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .step {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
-  color: var(--muted);
+  color: #9ca3af;
 }
 
-.step i {
+.step-num {
   display: inline-grid;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border-radius: 50%;
-  font-style: normal;
   font-size: 12px;
   font-weight: 700;
-  color: #fffaf0;
-  background: var(--muted);
+  color: #fff;
+  background: #d1d5db;
+  transition: background 0.2s;
 }
 
 .step.active {
@@ -1142,18 +1208,18 @@ const canRegister = computed(() => role.value === 'user')
   font-weight: 600;
 }
 
-.step.active i {
+.step.active .step-num {
   background: var(--brand);
 }
 
-.step.done i {
+.step.done .step-num {
   background: var(--green);
 }
 
 .step-line {
   flex: 1;
   height: 2px;
-  background: var(--line);
+  background: #e5e7eb;
   border-radius: 2px;
 }
 
@@ -1161,7 +1227,11 @@ const canRegister = computed(() => role.value === 'user')
   background: var(--brand);
 }
 
-@media (max-width: 860px) {
+.step-label {
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
   .login-container {
     grid-template-columns: 1fr;
     min-height: auto;
@@ -1169,6 +1239,7 @@ const canRegister = computed(() => role.value === 'user')
 
   .intro-panel {
     padding: 32px;
+    min-height: 320px;
   }
 
   .feature-list {
@@ -1182,7 +1253,7 @@ const canRegister = computed(() => role.value === 'user')
   }
 
   .login-container {
-    border-radius: 22px;
+    border-radius: 24px;
   }
 
   .role-tabs {
