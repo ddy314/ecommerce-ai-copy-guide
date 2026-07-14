@@ -1,0 +1,1201 @@
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+// ---------- 类型定义 ----------
+type OrderStatus = 'all' | 'pending' | 'paid' | 'shipped' | 'completed' | 'cancelled'
+
+interface OrderItem {
+  product_id: number
+  product_name: string
+  image_url: string | null
+  price: number | null
+  quantity: number
+}
+
+interface Order {
+  id: number
+  order_no: string
+  status: string
+  total_amount: number
+  pay_method: string | null
+  remark: string | null
+  created_at: string
+  paid_at: string | null
+  shipped_at: string | null
+  completed_at: string | null
+  cancelled_at: string | null
+  address: string | null
+  items: OrderItem[]
+}
+
+// ---------- 状态 ----------
+const loading = ref(false)
+const error = ref<string | null>(null)
+const orders = ref<Order[]>([])
+const activeStatus = ref<OrderStatus>('all')
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
+const totalPages = ref(1)
+
+// 详情弹窗
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detailOrder = ref<Order | null>(null)
+
+// 提示
+const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
+  visible: false,
+  message: '',
+  type: 'success',
+})
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toast.value = { visible: true, message, type }
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toast.value.visible = false
+  }, 2500)
+}
+
+// ---------- 请求头 ----------
+function authHeaders(): HeadersInit {
+  const token = localStorage.getItem('token')
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+// ---------- 状态 Tab 配置 ----------
+const statusTabs: { key: OrderStatus; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'pending', label: '待付款' },
+  { key: 'paid', label: '已付款' },
+  { key: 'shipped', label: '已发货' },
+  { key: 'completed', label: '已完成' },
+  { key: 'cancelled', label: '已取消' },
+]
+
+// ---------- 状态映射 ----------
+const statusMap: Record<string, { label: string; color: string }> = {
+  pending: { label: '待付款', color: 'var(--brand)' },
+  paid: { label: '已付款', color: 'var(--green)' },
+  shipped: { label: '已发货', color: '#1677ff' },
+  completed: { label: '已完成', color: 'var(--muted)' },
+  cancelled: { label: '已取消', color: '#999' },
+}
+
+function getStatusInfo(status: string): { label: string; color: string } {
+  return statusMap[status] || { label: status, color: 'var(--muted)' }
+}
+
+// ---------- 分页数字 ----------
+const pageNumbers = computed(() => {
+  const pages: number[] = []
+  const maxVisible = 7
+  let start = Math.max(1, currentPage.value - Math.floor(maxVisible / 2))
+  const end = Math.min(totalPages.value, start + maxVisible - 1)
+  if (end - start < maxVisible - 1) {
+    start = Math.max(1, end - maxVisible + 1)
+  }
+  for (let i = start; i <= end; i++) pages.push(i)
+  return pages
+})
+
+// ---------- 加载订单列表 ----------
+async function loadOrders() {
+  loading.value = true
+  error.value = null
+  try {
+    const params = new URLSearchParams()
+    if (activeStatus.value !== 'all') params.set('status', activeStatus.value)
+    params.set('page', currentPage.value.toString())
+    params.set('page_size', pageSize.value.toString())
+
+    const response = await fetch(`${API_BASE}/api/user/orders?${params.toString()}`, {
+      headers: authHeaders(),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const data = await response.json()
+    orders.value = data.orders || []
+    total.value = data.total || 0
+    totalPages.value = data.total_pages || 1
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '加载订单失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+// ---------- 切换状态 Tab ----------
+function selectStatus(status: OrderStatus) {
+  activeStatus.value = status
+  currentPage.value = 1
+  loadOrders()
+}
+
+function goToPage(page: number) {
+  if (page >= 1 && page <= totalPages.value) {
+    currentPage.value = page
+    loadOrders()
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+}
+
+// ---------- 订单详情 ----------
+async function openDetail(order: Order) {
+  detailVisible.value = true
+  detailLoading.value = true
+  detailOrder.value = null
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}`, {
+      headers: authHeaders(),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const data = await response.json()
+    detailOrder.value = data.order || data
+  } catch {
+    // 降级：使用列表中的信息
+    detailOrder.value = order
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function closeDetail() {
+  detailVisible.value = false
+  detailOrder.value = null
+}
+
+// ---------- 去支付 ----------
+async function payOrder(order: Order, event?: Event) {
+  event?.stopPropagation()
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/pay`, {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('支付成功')
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '支付失败', 'error')
+  }
+}
+
+// ---------- 取消订单 ----------
+async function cancelOrder(order: Order, event?: Event) {
+  event?.stopPropagation()
+  if (!confirm('确定要取消该订单吗？')) return
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('订单已取消')
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '取消失败', 'error')
+  }
+}
+
+// ---------- 确认收货 ----------
+async function confirmReceipt(order: Order, event?: Event) {
+  event?.stopPropagation()
+  if (!confirm('确认已收到商品吗？')) return
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/confirm`, {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('已确认收货')
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '确认收货失败', 'error')
+  }
+}
+
+// ---------- 格式化 ----------
+function formatPrice(price: number | null | undefined): string {
+  if (price == null) return '--'
+  return price.toFixed(2)
+}
+
+function formatTime(time: string | null): string {
+  if (!time) return '--'
+  return time.replace('T', ' ').slice(0, 19)
+}
+
+onMounted(() => {
+  loadOrders()
+})
+</script>
+
+<template>
+  <div class="my-orders">
+    <!-- 提示 Toast -->
+    <transition name="toast">
+      <div v-if="toast.visible" :class="['mo-toast', `mo-toast--${toast.type}`]">
+        {{ toast.message }}
+      </div>
+    </transition>
+
+    <!-- 状态筛选 Tab -->
+    <div class="mo-tabs">
+      <button
+        v-for="tab in statusTabs"
+        :key="tab.key"
+        :class="['mo-tab', { active: activeStatus === tab.key }]"
+        @click="selectStatus(tab.key)"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- 错误提示 -->
+    <div v-if="error" class="mo-error">{{ error }}</div>
+
+    <!-- 加载中 -->
+    <div v-if="loading" class="mo-loading">
+      <div class="mo-loading__spinner"></div>
+      <p>正在加载订单...</p>
+    </div>
+
+    <!-- 订单列表 -->
+    <div v-else-if="orders.length > 0" class="mo-list">
+      <div
+        v-for="order in orders"
+        :key="order.id"
+        class="mo-card"
+        @click="openDetail(order)"
+      >
+        <!-- 卡片头部 -->
+        <div class="mo-card__header">
+          <div class="mo-card__meta">
+            <span class="mo-card__no">订单号：{{ order.order_no }}</span>
+            <span class="mo-card__time">{{ formatTime(order.created_at) }}</span>
+          </div>
+          <span
+            class="mo-card__status"
+            :style="{ color: getStatusInfo(order.status).color }"
+          >
+            {{ getStatusInfo(order.status).label }}
+          </span>
+        </div>
+
+        <!-- 商品快照 -->
+        <div class="mo-card__items">
+          <div
+            v-for="(item, idx) in order.items.slice(0, 4)"
+            :key="idx"
+            class="mo-card__item"
+          >
+            <div class="mo-card__item-image">
+              <img
+                v-if="item.image_url"
+                :src="item.image_url"
+                :alt="item.product_name"
+                @error="(e: any) => e.target.style.display = 'none'"
+              />
+              <div v-if="!item.image_url" class="mo-card__item-noimg">无图</div>
+            </div>
+            <div class="mo-card__item-info">
+              <span class="mo-card__item-name">{{ item.product_name }}</span>
+              <span class="mo-card__item-price">¥{{ formatPrice(item.price) }} × {{ item.quantity }}</span>
+            </div>
+          </div>
+          <div v-if="order.items.length > 4" class="mo-card__more">
+            还有 {{ order.items.length - 4 }} 件商品...
+          </div>
+        </div>
+
+        <!-- 卡片底部 -->
+        <div class="mo-card__footer">
+          <div class="mo-card__total">
+            共 {{ order.items.reduce((s, i) => s + i.quantity, 0) }} 件商品，
+            合计：<strong>¥{{ formatPrice(order.total_amount) }}</strong>
+          </div>
+          <div class="mo-card__actions" @click.stop>
+            <!-- 待付款 -->
+            <template v-if="order.status === 'pending'">
+              <button class="mo-btn mo-btn--ghost" @click="cancelOrder(order, $event)">取消订单</button>
+              <button class="mo-btn mo-btn--primary" @click="payOrder(order, $event)">去支付</button>
+            </template>
+            <!-- 已付款 — 等待商家发货 -->
+            <template v-else-if="order.status === 'paid'">
+              <span class="mo-btn mo-btn--hint">等待商家发货</span>
+            </template>
+            <!-- 已发货 -->
+            <template v-else-if="order.status === 'shipped'">
+              <button class="mo-btn mo-btn--primary" @click="confirmReceipt(order, $event)">确认收货</button>
+            </template>
+            <!-- 其他状态 -->
+            <button class="mo-btn mo-btn--ghost" @click="openDetail(order)">查看详情</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分页 -->
+      <div v-if="totalPages > 1" class="mo-pagination">
+        <button
+          class="mo-page-btn"
+          :disabled="currentPage === 1"
+          @click="goToPage(currentPage - 1)"
+        >
+          上一页
+        </button>
+        <button
+          v-for="page in pageNumbers"
+          :key="page"
+          :class="['mo-page-btn', { active: page === currentPage }]"
+          @click="goToPage(page)"
+        >
+          {{ page }}
+        </button>
+        <button
+          class="mo-page-btn"
+          :disabled="currentPage === totalPages"
+          @click="goToPage(currentPage + 1)"
+        >
+          下一页
+        </button>
+        <span class="mo-page-info">第 {{ currentPage }} / {{ totalPages }} 页，共 {{ total }} 条</span>
+      </div>
+    </div>
+
+    <!-- 空状态 -->
+    <div v-else class="mo-empty">
+      <div class="mo-empty__icon">单</div>
+      <h3>暂无订单</h3>
+      <p>快去挑选心仪的商品吧</p>
+    </div>
+
+    <!-- 订单详情弹窗 -->
+    <transition name="modal">
+      <div v-if="detailVisible" class="mo-modal-overlay" @click.self="closeDetail">
+        <div class="mo-modal">
+          <div class="mo-modal__header">
+            <h2>订单详情</h2>
+            <button class="mo-modal__close" @click="closeDetail">×</button>
+          </div>
+
+          <!-- 加载中 -->
+          <div v-if="detailLoading" class="mo-modal__loading">
+            <div class="mo-loading__spinner"></div>
+            <p>加载订单详情...</p>
+          </div>
+
+          <!-- 详情内容 -->
+          <div v-else-if="detailOrder" class="mo-modal__body">
+            <!-- 订单基本信息 -->
+            <div class="mo-detail-section">
+              <div class="mo-detail-section__title">订单信息</div>
+              <div class="mo-detail-grid">
+                <div class="mo-detail-item">
+                  <span class="mo-detail-item__label">订单编号</span>
+                  <span class="mo-detail-item__value">{{ detailOrder.order_no }}</span>
+                </div>
+                <div class="mo-detail-item">
+                  <span class="mo-detail-item__label">下单时间</span>
+                  <span class="mo-detail-item__value">{{ formatTime(detailOrder.created_at) }}</span>
+                </div>
+                <div class="mo-detail-item">
+                  <span class="mo-detail-item__label">订单状态</span>
+                  <span
+                    class="mo-detail-item__value"
+                    :style="{ color: getStatusInfo(detailOrder.status).color, fontWeight: '700' }"
+                  >
+                    {{ getStatusInfo(detailOrder.status).label }}
+                  </span>
+                </div>
+                <div class="mo-detail-item">
+                  <span class="mo-detail-item__label">支付方式</span>
+                  <span class="mo-detail-item__value">
+                    {{ detailOrder.pay_method === 'wechat' ? '微信支付' : detailOrder.pay_method === 'alipay' ? '支付宝' : '--' }}
+                  </span>
+                </div>
+                <div v-if="detailOrder.paid_at" class="mo-detail-item">
+                  <span class="mo-detail-item__label">支付时间</span>
+                  <span class="mo-detail-item__value">{{ formatTime(detailOrder.paid_at) }}</span>
+                </div>
+                <div v-if="detailOrder.shipped_at" class="mo-detail-item">
+                  <span class="mo-detail-item__label">发货时间</span>
+                  <span class="mo-detail-item__value">{{ formatTime(detailOrder.shipped_at) }}</span>
+                </div>
+                <div v-if="detailOrder.completed_at" class="mo-detail-item">
+                  <span class="mo-detail-item__label">完成时间</span>
+                  <span class="mo-detail-item__value">{{ formatTime(detailOrder.completed_at) }}</span>
+                </div>
+                <div v-if="detailOrder.cancelled_at" class="mo-detail-item">
+                  <span class="mo-detail-item__label">取消时间</span>
+                  <span class="mo-detail-item__value">{{ formatTime(detailOrder.cancelled_at) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 收货地址 -->
+            <div v-if="detailOrder.address" class="mo-detail-section">
+              <div class="mo-detail-section__title">收货地址</div>
+              <p class="mo-detail-address">{{ detailOrder.address }}</p>
+            </div>
+
+            <!-- 商品列表 -->
+            <div class="mo-detail-section">
+              <div class="mo-detail-section__title">商品清单</div>
+              <div class="mo-detail-products">
+                <div
+                  v-for="(item, idx) in detailOrder.items"
+                  :key="idx"
+                  class="mo-detail-product"
+                >
+                  <div class="mo-detail-product__image">
+                    <img
+                      v-if="item.image_url"
+                      :src="item.image_url"
+                      :alt="item.product_name"
+                      @error="(e: any) => e.target.style.display = 'none'"
+                    />
+                    <div v-if="!item.image_url" class="mo-card__item-noimg">无图</div>
+                  </div>
+                  <div class="mo-detail-product__info">
+                    <span class="mo-detail-product__name">{{ item.product_name }}</span>
+                    <span class="mo-detail-product__price">¥{{ formatPrice(item.price) }}</span>
+                  </div>
+                  <div class="mo-detail-product__qty">× {{ item.quantity }}</div>
+                  <div class="mo-detail-product__subtotal">
+                    ¥{{ formatPrice((item.price ?? 0) * item.quantity) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 备注 -->
+            <div v-if="detailOrder.remark" class="mo-detail-section">
+              <div class="mo-detail-section__title">订单备注</div>
+              <p class="mo-detail-remark">{{ detailOrder.remark }}</p>
+            </div>
+
+            <!-- 金额汇总 -->
+            <div class="mo-detail-section">
+              <div class="mo-detail-summary">
+                <div class="mo-detail-summary__row">
+                  <span>商品总数</span>
+                  <span>{{ detailOrder.items.reduce((s, i) => s + i.quantity, 0) }} 件</span>
+                </div>
+                <div class="mo-detail-summary__row mo-detail-summary__row--total">
+                  <span>订单总额</span>
+                  <span class="mo-detail-summary__amount">¥{{ formatPrice(detailOrder.total_amount) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div v-if="detailOrder.status === 'pending' || detailOrder.status === 'paid' || detailOrder.status === 'shipped'" class="mo-detail-actions">
+              <button
+                v-if="detailOrder.status === 'pending'"
+                class="mo-btn mo-btn--ghost"
+                @click="cancelOrder(detailOrder); closeDetail()"
+              >
+                取消订单
+              </button>
+              <button
+                v-if="detailOrder.status === 'pending'"
+                class="mo-btn mo-btn--primary"
+                @click="payOrder(detailOrder); closeDetail()"
+              >
+                去支付
+              </button>
+              <span
+                v-if="detailOrder.status === 'paid'"
+                class="mo-detail-hint"
+              >
+                等待商家发货中...
+              </span>
+              <button
+                v-if="detailOrder.status === 'shipped'"
+                class="mo-btn mo-btn--primary"
+                @click="confirmReceipt(detailOrder); closeDetail()"
+              >
+                确认收货
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+  </div>
+</template>
+
+<style scoped>
+.my-orders {
+  position: relative;
+}
+
+/* Toast */
+.mo-toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 12px 28px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.mo-toast--success {
+  background: var(--green);
+}
+
+.mo-toast--error {
+  background: var(--brand);
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-10px);
+}
+
+/* 状态 Tab */
+.mo-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--line);
+  overflow-x: auto;
+}
+
+.mo-tab {
+  padding: 10px 20px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.mo-tab:hover {
+  color: var(--brand);
+}
+
+.mo-tab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 700;
+}
+
+/* 加载 */
+.mo-loading {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--muted);
+}
+
+.mo-loading__spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: mo-spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes mo-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 错误 */
+.mo-error {
+  background: #fff0f0;
+  color: #c33;
+  padding: 14px 18px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+/* 订单列表 */
+.mo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mo-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.mo-card:hover {
+  border-color: var(--brand);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.mo-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: rgba(217, 95, 45, 0.03);
+  border-bottom: 1px solid var(--line);
+}
+
+.mo-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.mo-card__no {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mo-card__time {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.mo-card__status {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* 商品快照 */
+.mo-card__items {
+  padding: 16px 20px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.mo-card__item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 280px;
+}
+
+.mo-card__item-image {
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8f4ef;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mo-card__item-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mo-card__item-noimg {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mo-card__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.mo-card__item-name {
+  font-size: 13px;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mo-card__item-price {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mo-card__more {
+  font-size: 13px;
+  color: var(--muted);
+  align-self: center;
+}
+
+/* 卡片底部 */
+.mo-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: rgba(217, 95, 45, 0.02);
+}
+
+.mo-card__total {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.mo-card__total strong {
+  font-size: 18px;
+  color: var(--brand);
+  font-weight: 800;
+}
+
+.mo-card__actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* 按钮 */
+.mo-btn {
+  padding: 8px 20px;
+  border: 1px solid var(--brand);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mo-btn--ghost {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--line);
+}
+
+.mo-btn--ghost:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.mo-btn--hint {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 14px;
+}
+
+.mo-detail-hint {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+.mo-btn--primary {
+  color: #fff;
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.mo-btn--primary:hover {
+  background: var(--brand-dark);
+}
+
+/* 空状态 */
+.mo-empty {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--muted);
+}
+
+.mo-empty__icon {
+  display: inline-grid;
+  width: 80px;
+  height: 80px;
+  place-items: center;
+  border-radius: 24px;
+  margin-bottom: 20px;
+  font-size: 32px;
+  font-weight: 800;
+  color: #fffaf0;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+}
+
+.mo-empty h3 {
+  font-size: 20px;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.mo-empty p {
+  font-size: 14px;
+  margin: 0;
+}
+
+/* 分页 */
+.mo-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin-top: 28px;
+  flex-wrap: wrap;
+}
+
+.mo-page-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.mo-page-btn:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.mo-page-btn.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+
+.mo-page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mo-page-info {
+  margin-left: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 详情弹窗 */
+.mo-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+
+.mo-modal {
+  width: min(720px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+}
+
+.mo-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mo-modal__header h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.mo-modal__close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 20px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.mo-modal__close:hover {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.mo-modal__loading {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--muted);
+}
+
+.mo-modal__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.mo-detail-section {
+  margin-bottom: 24px;
+}
+
+.mo-detail-section:last-child {
+  margin-bottom: 0;
+}
+
+.mo-detail-section__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 12px;
+  padding-left: 10px;
+  border-left: 3px solid var(--brand);
+}
+
+.mo-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.mo-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  background: rgba(217, 95, 45, 0.03);
+  border-radius: 8px;
+}
+
+.mo-detail-item__label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mo-detail-item__value {
+  font-size: 14px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.mo-detail-address {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(217, 95, 45, 0.03);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.mo-detail-products {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mo-detail-product {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.mo-detail-product__image {
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8f4ef;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mo-detail-product__image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mo-detail-product__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.mo-detail-product__name {
+  font-size: 14px;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mo-detail-product__price {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.mo-detail-product__qty {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.mo-detail-product__subtotal {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--brand);
+  min-width: 80px;
+  text-align: right;
+}
+
+.mo-detail-remark {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(250, 173, 20, 0.06);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.mo-detail-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(217, 95, 45, 0.02);
+}
+
+.mo-detail-summary__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.mo-detail-summary__row--total {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 16px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.mo-detail-summary__amount {
+  font-size: 22px;
+  color: var(--brand);
+  font-weight: 800;
+}
+
+.mo-detail-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.mo-detail-actions .mo-btn {
+  padding: 10px 28px;
+  font-size: 14px;
+}
+
+/* 弹窗过渡 */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.25s;
+}
+
+.modal-enter-active .mo-modal,
+.modal-leave-active .mo-modal {
+  transition: transform 0.25s;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+
+.modal-enter-from .mo-modal,
+.modal-leave-to .mo-modal {
+  transform: scale(0.95) translateY(20px);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .mo-card__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .mo-card__meta {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .mo-card__footer {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .mo-card__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .mo-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mo-detail-product {
+    flex-wrap: wrap;
+  }
+}
+</style>
