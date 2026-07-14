@@ -17,6 +17,7 @@ import QAStats from './components/merchant/QAStats.vue'
 import UserManage from './components/merchant/UserManage.vue'
 import OrderManage from './components/merchant/OrderManage.vue'
 import RevenueDashboard from './components/merchant/RevenueDashboard.vue'
+import MerchantCustomerService from './components/merchant/MerchantCustomerService.vue'
 
 // 应用视图状态：未登录 / 商家后台 / 用户前台
 type AppView = 'login' | 'merchant' | 'user'
@@ -112,6 +113,9 @@ function handleLogout() {
 
       <!-- 用户管理 -->
       <UserManage v-else-if="page === 'users'" />
+
+      <!-- 客服管理 -->
+      <MerchantCustomerService v-else-if="page === 'customer-service'" />
 
       <!-- 占位 -->
       <div
