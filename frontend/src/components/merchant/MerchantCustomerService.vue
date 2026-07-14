@@ -24,7 +24,7 @@ interface CSMessage {
   id: number
   user_id: number
   product_id?: number
-  sender_role: 'user' | 'merchant'
+  sender_role: 'user' | 'merchant' | 'ai'
   content: string
   is_read: boolean
   created_at: string
@@ -73,6 +73,28 @@ function formatTime(t: string | undefined): string {
   if (!t) return ''
   const d = new Date(t)
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+function renderMarkdown(text: string): string {
+  if (!text) return ''
+  let html = text
+  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/\n/g, '<br>')
+  html = html.replace(/•\s?(.+?)(<br>|$)/g, '<li>$1</li>')
+  html = html.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, (match) => {
+    return '<ul class="mcs-list">' + match + '</ul>'
+  })
+  html = html.replace(/<\/li><br><li>/g, '</li><li>')
+  html = html.replace(/<br>(<ul)/g, '$1')
+  html = html.replace(/(<\/ul>)<br>/g, '$1')
+  return html
+}
+
+function senderLabel(role: string): string {
+  if (role === 'merchant') return '商'
+  if (role === 'ai') return 'AI'
+  return '用'
 }
 
 async function loadThreads() {
@@ -251,13 +273,21 @@ onUnmounted(() => {
             >
               <div
                 class="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                :class="msg.sender_role === 'merchant'
-                  ? 'bg-gradient-to-br from-primary to-primary-dark'
-                  : 'bg-gradient-to-br from-accent-blue to-primary'"
+                :class="{
+                  'bg-gradient-to-br from-primary to-primary-dark': msg.sender_role === 'merchant',
+                  'bg-gradient-to-br from-accent-blue to-primary': msg.sender_role === 'user',
+                  'bg-gradient-to-br from-primary-light to-accent-blue': msg.sender_role === 'ai',
+                }"
               >
-                {{ msg.sender_role === 'merchant' ? '商' : '用' }}
+                {{ senderLabel(msg.sender_role) }}
               </div>
               <div
+                v-if="msg.sender_role === 'ai'"
+                class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] leading-relaxed shadow-sm bg-primary-light/40 text-gray-800 border border-primary-light/60 rounded-bl-sm"
+                v-html="renderMarkdown(msg.content)"
+              ></div>
+              <div
+                v-else
                 class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] whitespace-pre-wrap leading-relaxed shadow-sm"
                 :class="msg.sender_role === 'merchant'
                   ? 'bg-gradient-to-r from-primary to-primary-dark text-white rounded-br-sm'
@@ -300,3 +330,22 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+:deep(.mcs-list) {
+  margin: 6px 0;
+  padding-left: 16px;
+  list-style: none;
+}
+:deep(.mcs-list li) {
+  position: relative;
+  margin-bottom: 4px;
+}
+:deep(.mcs-list li::before) {
+  content: '•';
+  position: absolute;
+  left: -14px;
+  color: #9B87F5;
+  font-weight: bold;
+}
+</style>

@@ -106,6 +106,7 @@ def init_db() -> None:
     _add_password_plain_column()
     _add_display_id_columns()
     _add_product_media_columns()
+    _add_order_logistics_columns()
 
 
 def _add_password_plain_column() -> None:
@@ -204,3 +205,29 @@ def _add_product_media_columns() -> None:
                 conn.commit()
     except Exception as e:
         logger.warning(f"添加 product media 字段失败: {e}")
+
+
+def _add_order_logistics_columns() -> None:
+    """为已有 orders 表添加物流与售后字段（如果不存在）"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        if "orders" in inspector.get_table_names():
+            columns = [c["name"] for c in inspector.get_columns("orders")]
+            with engine.connect() as conn:
+                col_defs = [
+                    ("tracking_no", "VARCHAR(100)"),
+                    ("return_tracking_no", "VARCHAR(100)"),
+                    ("return_status", "VARCHAR(20)"),
+                    ("return_reason", "VARCHAR(500)"),
+                    ("return_applied_at", "DateTime"),
+                    ("return_completed_at", "DateTime"),
+                ]
+                for col_name, col_type in col_defs:
+                    if col_name not in columns:
+                        conn.execute(text(f"ALTER TABLE orders ADD COLUMN {col_name} {col_type}"))
+                        logger.info(f"已为 orders 表添加 {col_name} 字段")
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"添加订单物流字段失败: {e}")

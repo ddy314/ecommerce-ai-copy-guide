@@ -358,6 +358,7 @@ def cancel_order(order_id: int):
                 return jsonify({"error": "invalid_status", "message": "当前状态不可取消"}), 400
 
             order.status = "cancelled"
+            order.cancelled_at = datetime.now()
             db.commit()
             return jsonify({"message": "订单已取消"})
     except Exception as e:
@@ -411,12 +412,15 @@ def list_orders():
 
             all_orders = list(db.execute(stmt).scalars().all())
             total = len(all_orders)
+            total_pages = max(1, (total + page_size - 1) // page_size)
             orders = all_orders[(page - 1) * page_size: page * page_size]
             orders_data = [o.to_dict() for o in orders]
 
             return jsonify({
                 "total": total,
                 "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
                 "orders": orders_data,
             })
     except Exception as e:
@@ -441,6 +445,74 @@ def get_order_detail(order_id: int):
             return jsonify({"order": order_data})
     except Exception as e:
         logger.error(f"获取订单详情失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
+@user_bp.post("/user/orders/<int:order_id>/apply-return")
+def apply_return(order_id: int):
+    """用户申请退换货"""
+    user_payload, error = require_auth(request)
+    if error:
+        return jsonify(error), 401
+
+    data = request.get_json(silent=True) or {}
+    return_type = (data.get("return_type") or "return").strip()
+    reason = (data.get("reason") or "").strip()
+
+    if not reason:
+        return jsonify({"error": "invalid_input", "message": "请填写退换货原因"}), 400
+    if return_type not in ("return", "exchange"):
+        return jsonify({"error": "invalid_input", "message": "退换货类型错误"}), 400
+
+    try:
+        with SessionLocal() as db:
+            order = db.get(Order, order_id)
+            if not order or order.user_id != user_payload["user_id"]:
+                return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+
+            if order.status in ("pending", "cancelled"):
+                return jsonify({"error": "invalid_status", "message": "当前订单状态不可申请退换货"}), 400
+
+            order.status = "returning"
+            order.return_status = "returning"
+            order.return_reason = f"[{return_type == 'return' and '退货' or '换货'}] {reason}"
+            order.return_applied_at = datetime.now()
+            db.commit()
+            db.refresh(order)
+            return jsonify({"message": "退换货申请已提交", "order": order.to_dict()})
+    except Exception as e:
+        logger.error(f"申请退换货失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
+@user_bp.post("/user/orders/<int:order_id>/return-tracking")
+def fill_return_tracking(order_id: int):
+    """用户填写退货快递单号"""
+    user_payload, error = require_auth(request)
+    if error:
+        return jsonify(error), 401
+
+    data = request.get_json(silent=True) or {}
+    tracking_no = (data.get("tracking_no") or "").strip()
+
+    if not tracking_no:
+        return jsonify({"error": "invalid_input", "message": "请填写退货快递单号"}), 400
+
+    try:
+        with SessionLocal() as db:
+            order = db.get(Order, order_id)
+            if not order or order.user_id != user_payload["user_id"]:
+                return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+
+            if order.status != "returning":
+                return jsonify({"error": "invalid_status", "message": "当前订单不在退换货中"}), 400
+
+            order.return_tracking_no = tracking_no
+            db.commit()
+            db.refresh(order)
+            return jsonify({"message": "退货快递单号已提交", "order": order.to_dict()})
+    except Exception as e:
+        logger.error(f"填写退货单号失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 

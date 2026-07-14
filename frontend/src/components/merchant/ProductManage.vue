@@ -29,6 +29,7 @@ interface Product {
   brand?: string | null
   rating?: number | null
   review_count?: number | null
+  is_published?: boolean | null
   created_at?: string
 }
 
@@ -50,6 +51,7 @@ interface ProductForm {
   image_url: string
   image_urls: string[]
   videos: string[]
+  is_published: boolean
 }
 
 const emptyForm = (): ProductForm => ({
@@ -62,6 +64,7 @@ const emptyForm = (): ProductForm => ({
   image_url: '',
   image_urls: [],
   videos: [],
+  is_published: true,
 })
 
 // 列表状态
@@ -190,6 +193,7 @@ function openEdit(product: Product) {
     image_url: firstUrl,
     image_urls: imgs,
     videos: product.videos || [],
+    is_published: product.is_published !== false,
   }
   pendingImages.value = []
   pendingVideos.value = []
@@ -215,6 +219,7 @@ function buildPayload() {
     image_url: f.image_url.trim(),
     image_urls,
     videos,
+    is_published: f.is_published,
   }
 }
 
@@ -466,6 +471,7 @@ onMounted(() => {
             <th>类目</th>
             <th>价格</th>
             <th>来源</th>
+            <th>状态</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -500,6 +506,11 @@ onMounted(() => {
             </td>
             <td>{{ sourceText(product.source) }}</td>
             <td>
+              <span :class="['pm-status', product.is_published !== false ? 'pm-status--on' : 'pm-status--off']">
+                {{ product.is_published !== false ? '已上架' : '已下架' }}
+              </span>
+            </td>
+            <td>
               <div class="pm-ops">
                 <button class="pm-op pm-op--edit" @click="openEdit(product)">编辑</button>
                 <button class="pm-op pm-op--del" @click="askDelete(product)">删除</button>
@@ -507,7 +518,7 @@ onMounted(() => {
             </td>
           </tr>
           <tr v-if="products.length === 0">
-            <td colspan="5" class="pm-empty">暂无商品数据，点击「新增商品」添加</td>
+            <td colspan="6" class="pm-empty">暂无商品数据，点击「新增商品」添加</td>
           </tr>
         </tbody>
       </table>
@@ -658,6 +669,13 @@ onMounted(() => {
                   <button type="button" class="pm-media-del" @click="removeVideo(item.url)">×</button>
                 </div>
               </div>
+            </div>
+            <div class="pm-form-group pm-form-group--full pm-publish-row">
+              <label class="pm-publish-label">
+                <input v-model="form.is_published" type="checkbox" />
+                <span class="pm-toggle" :class="{ 'pm-toggle--on': form.is_published }"></span>
+                <span>{{ form.is_published ? '立即上架' : '暂不上架' }}</span>
+              </label>
             </div>
           </div>
         </div>
@@ -1016,6 +1034,41 @@ onMounted(() => {
   color: #fff;
 }
 
+.pm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pm-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.pm-status--on {
+  background: rgba(31, 138, 91, 0.1);
+  color: #1f8a5b;
+}
+
+.pm-status--on::before {
+  background: #1f8a5b;
+}
+
+.pm-status--off {
+  background: rgba(136, 136, 136, 0.1);
+  color: var(--muted);
+}
+
+.pm-status--off::before {
+  background: var(--muted);
+}
+
 .pm-empty {
   text-align: center;
   color: var(--muted);
@@ -1189,6 +1242,58 @@ onMounted(() => {
 .pm-form-group textarea {
   resize: vertical;
   min-height: 72px;
+}
+
+.pm-publish-row {
+  display: flex;
+  align-items: center;
+}
+
+.pm-publish-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pm-publish-label input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.pm-toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.pm-toggle::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.pm-toggle--on {
+  background: var(--brand);
+}
+
+.pm-toggle--on::after {
+  transform: translateX(20px);
 }
 
 /* 媒体上传 */

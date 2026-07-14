@@ -246,7 +246,9 @@ async function onCategoryChange() {
 /** 商品选择变化时，自动填充商品名称 */
 function onProductSelectChange(e: Event) {
   const target = e.target as HTMLSelectElement
-  selectedProductId.value = target.value ? Number(target.value) : null
+  const raw = target.value.trim()
+  const pid = raw ? Number(raw) : null
+  selectedProductId.value = pid && !isNaN(pid) ? pid : null
   if (selectedProductId.value === null) return
   const product = products.value.find((p) => p.id === selectedProductId.value)
   if (product) {
@@ -256,15 +258,19 @@ function onProductSelectChange(e: Event) {
 
 /** 加载选中商品的评论到文本框 */
 async function loadProductReviews() {
-  if (selectedProductId.value === null) return
+  const pid = selectedProductId.value
+  if (pid === null || pid === undefined || isNaN(pid)) return
   loadingReviews.value = true
   dbError.value = null
   try {
     const res = await fetch(
-      `${API_BASE}/api/products/${selectedProductId.value}/reviews?limit=50`,
+      `${API_BASE}/api/products/${pid}/reviews?limit=50`,
       { headers: authHeaders() },
     )
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${res.status}`)
+    }
     const data = await res.json()
     const list = (data.reviews || []) as Array<string | { content?: string }>
     const contents = list
@@ -278,17 +284,79 @@ async function loadProductReviews() {
   }
 }
 
+/** 构建 txt 报告文本 */
+function buildReportText(r: ReviewAnalysisResponse): string {
+  const lines: string[] = []
+  lines.push(`评论情感分析报告：${r.product_name}`)
+  lines.push('')
+  lines.push(`总评论数：${r.total}`)
+  lines.push(`正面：${r.sentiment.positive} 条（${positivePercent.value}%）`)
+  lines.push(`中性：${r.sentiment.neutral} 条（${neutralPercent.value}%）`)
+  lines.push(`负面：${r.sentiment.negative} 条（${negativePercent.value}%）`)
+  lines.push('')
+  if (r.top_keywords.length) {
+    lines.push('高频关键词：')
+    lines.push(...r.top_keywords.map(k => `· ${k}`))
+    lines.push('')
+  }
+  if (r.pain_points.length) {
+    lines.push('用户痛点：')
+    lines.push(...r.pain_points.map(p => `· ${p}`))
+    lines.push('')
+  }
+  if (r.optimization_suggestions.length) {
+    lines.push('优化建议：')
+    lines.push(...r.optimization_suggestions.map(s => `· ${s}`))
+    lines.push('')
+  }
+  if (r.sentiment_detail?.positive_reviews?.length) {
+    lines.push('好评精选：')
+    lines.push(...r.sentiment_detail.positive_reviews.map(rv => `✓ ${rv}`))
+    lines.push('')
+  }
+  if (r.sentiment_detail?.negative_reviews?.length) {
+    lines.push('差评反馈：')
+    lines.push(...r.sentiment_detail.negative_reviews.map(rv => `✗ ${rv}`))
+    lines.push('')
+  }
+  if (r.sentiment_detail?.complaints?.length) {
+    lines.push('用户吐槽点：')
+    lines.push(...r.sentiment_detail.complaints.map(c => `! ${complaintText(c)}`))
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
+/** 下载 txt */
+function downloadTxt() {
+  if (!result.value) return
+  const text = buildReportText(result.value)
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `评论情感分析_${result.value.product_name}_${new Date().toISOString().slice(0, 10)}.txt`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 onMounted(() => {
   fetchCategories()
 })
-
 </script>
 
 <template>
   <div class="feature-page">
     <div class="page-header">
-      <h1>评论情感分析</h1>
-      <p>分析商品评论的情感分布、关键词和痛点，支持手动输入与文件上传</p>
+      <div class="page-header__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </div>
+      <div>
+        <h1>评论情感分析</h1>
+        <p>分析商品评论的情感分布、关键词和痛点，支持手动输入与文件上传</p>
+      </div>
     </div>
 
     <div class="content-grid">
@@ -309,18 +377,18 @@ onMounted(() => {
                 <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
               </select>
               <select
-                :value="selectedProductId"
-                class="db-select"
-                :disabled="loadingProducts || !selectedCategory"
-                @change="onProductSelectChange"
-              >
-                <option :value="null">
-                  {{ loadingProducts ? '加载商品中...' : !selectedCategory ? '请先选择分类' : '选择商品' }}
-                </option>
-                <option v-for="p in products" :key="p.id" :value="p.id">
-                  {{ p.name }}
-                </option>
-              </select>
+            :value="selectedProductId ?? ''"
+            class="db-select"
+            :disabled="loadingProducts || !selectedCategory"
+            @change="onProductSelectChange"
+          >
+            <option value="">
+              {{ loadingProducts ? '加载商品中...' : !selectedCategory ? '请先选择分类' : '选择商品' }}
+            </option>
+            <option v-for="p in products" :key="p.id" :value="p.id">
+              {{ p.name }}
+            </option>
+          </select>
             </div>
             <button
               type="button"
@@ -331,6 +399,11 @@ onMounted(() => {
               {{ loadingReviews ? '加载中...' : '加载商品评论' }}
             </button>
             <div v-if="dbError" class="db-error">{{ dbError }}</div>
+          </div>
+
+          <div class="form-group">
+            <label>商品名称</label>
+            <input v-model="form.product_name" type="text" placeholder="例如：示例商品" />
           </div>
 
           <div class="form-group">
@@ -374,7 +447,13 @@ onMounted(() => {
             <p class="upload-text">正在上传并分析...</p>
           </template>
           <template v-else>
-            <div class="upload-icon">↑</div>
+            <div class="upload-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17,8 12,3 7,8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </div>
             <p class="upload-text">
               <strong>拖拽文件到此处</strong> 或 <strong>点击上传</strong>
             </p>
@@ -390,9 +469,22 @@ onMounted(() => {
         <div v-if="uploadError && !result" class="error-message">{{ uploadError }}</div>
 
         <div v-if="result" class="result-content">
-          <!-- 情感分布饼图 -->
+          <div class="result-meta">
+            <div class="result-tags">
+              <span class="meta-product">{{ result.product_name }}</span>
+              <span class="meta-tag">共 {{ result.total }} 条评论</span>
+            </div>
+            <div class="result-actions">
+              <button class="action-btn" @click="downloadTxt">下载 txt</button>
+            </div>
+          </div>
+
+          <!-- 情感分布 -->
           <div class="result-section">
-            <h3>情感分布</h3>
+            <div class="section-label">
+              <span class="section-dot"></span>
+              <h3>情感分布</h3>
+            </div>
             <div class="sentiment-chart">
               <div class="pie-chart" :style="pieStyle">
                 <div class="pie-center">
@@ -418,6 +510,20 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+            <div class="sentiment-stats">
+              <div class="stat-card stat-card--positive">
+                <span class="stat-value">{{ result.sentiment.positive }}</span>
+                <span class="stat-label">正面</span>
+              </div>
+              <div class="stat-card stat-card--neutral">
+                <span class="stat-value">{{ result.sentiment.neutral }}</span>
+                <span class="stat-label">中性</span>
+              </div>
+              <div class="stat-card stat-card--negative">
+                <span class="stat-value">{{ result.sentiment.negative }}</span>
+                <span class="stat-label">负面</span>
+              </div>
+            </div>
           </div>
 
           <!-- 好评 -->
@@ -425,7 +531,10 @@ onMounted(() => {
             v-if="result.sentiment_detail?.positive_reviews?.length"
             class="result-section result-section--positive"
           >
-            <h3>好评精选</h3>
+            <div class="section-label">
+              <span class="section-dot section-dot--positive"></span>
+              <h3>好评精选</h3>
+            </div>
             <ul class="review-list">
               <li v-for="(r, i) in result.sentiment_detail.positive_reviews" :key="'pos' + i">
                 {{ r }}
@@ -438,7 +547,10 @@ onMounted(() => {
             v-if="result.sentiment_detail?.negative_reviews?.length"
             class="result-section result-section--negative"
           >
-            <h3>差评反馈</h3>
+            <div class="section-label">
+              <span class="section-dot section-dot--negative"></span>
+              <h3>差评反馈</h3>
+            </div>
             <ul class="review-list">
               <li v-for="(r, i) in result.sentiment_detail.negative_reviews" :key="'neg' + i">
                 {{ r }}
@@ -451,7 +563,10 @@ onMounted(() => {
             v-if="result.sentiment_detail?.complaints?.length"
             class="result-section result-section--complaint"
           >
-            <h3>用户吐槽点</h3>
+            <div class="section-label">
+              <span class="section-dot section-dot--complaint"></span>
+              <h3>用户吐槽点</h3>
+            </div>
             <ul class="review-list">
               <li v-for="(c, i) in result.sentiment_detail.complaints" :key="'cmp' + i">
                 {{ complaintText(c) }}
@@ -461,7 +576,10 @@ onMounted(() => {
 
           <!-- 关键词 -->
           <div v-if="result.top_keywords.length > 0" class="result-section">
-            <h3>高频关键词</h3>
+            <div class="section-label">
+              <span class="section-dot"></span>
+              <h3>高频关键词</h3>
+            </div>
             <div class="keywords">
               <span v-for="keyword in result.top_keywords" :key="keyword" class="keyword-tag">
                 {{ keyword }}
@@ -471,7 +589,10 @@ onMounted(() => {
 
           <!-- 痛点 -->
           <div v-if="result.pain_points.length > 0" class="result-section">
-            <h3>用户痛点</h3>
+            <div class="section-label">
+              <span class="section-dot section-dot--negative"></span>
+              <h3>用户痛点</h3>
+            </div>
             <ul class="pain-points">
               <li v-for="point in result.pain_points" :key="point">{{ point }}</li>
             </ul>
@@ -479,7 +600,10 @@ onMounted(() => {
 
           <!-- 优化建议 -->
           <div v-if="result.optimization_suggestions.length > 0" class="result-section">
-            <h3>优化建议</h3>
+            <div class="section-label">
+              <span class="section-dot section-dot--positive"></span>
+              <h3>优化建议</h3>
+            </div>
             <ul class="suggestions">
               <li v-for="suggestion in result.optimization_suggestions" :key="suggestion">
                 {{ suggestion }}
@@ -489,6 +613,11 @@ onMounted(() => {
         </div>
 
         <div v-else-if="!loading && !uploading" class="empty-state">
+          <div class="empty-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </div>
           <p>输入评论或上传文件后查看分析结果</p>
         </div>
       </div>
@@ -504,23 +633,46 @@ onMounted(() => {
 }
 
 .page-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   margin-bottom: 32px;
+}
+
+.page-header__icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 24px rgba(217, 95, 45, 0.25);
+}
+
+.page-header__icon svg {
+  width: 28px;
+  height: 28px;
 }
 
 .page-header h1 {
   font-size: 32px;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
+  color: var(--ink);
 }
 
 .page-header p {
   color: var(--muted);
   margin: 0;
+  font-size: 15px;
 }
 
 .content-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 32px;
+  align-items: start;
 }
 
 .input-column {
@@ -532,9 +684,14 @@ onMounted(() => {
 .input-form {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
   overflow-y: auto;
   min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .form-group {
@@ -547,8 +704,9 @@ onMounted(() => {
 }
 
 .form-group label {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
+  color: var(--ink);
 }
 
 .form-group input,
@@ -558,16 +716,25 @@ onMounted(() => {
   border-radius: 12px;
   font-size: 15px;
   font-family: inherit;
-  background: var(--panel);
+  background: #fff;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
   overflow-wrap: break-word;
 }
 
+.form-group input:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.1);
+}
+
 .form-group textarea {
-  resize: none;
+  resize: vertical;
   min-height: 160px;
+  line-height: 1.6;
   word-break: break-all;
 }
 
@@ -664,6 +831,7 @@ onMounted(() => {
 .btn-primary:hover:not(:disabled) {
   background: var(--brand-dark);
   transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(217, 95, 45, 0.25);
 }
 
 .btn-primary:disabled {
@@ -700,7 +868,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .upload-zone:hover {
@@ -725,15 +893,19 @@ onMounted(() => {
 }
 
 .upload-icon {
-  display: inline-grid;
   width: 48px;
   height: 48px;
-  place-items: center;
   border-radius: 50%;
-  font-size: 24px;
-  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--brand);
   background: rgba(217, 95, 45, 0.1);
+}
+
+.upload-icon svg {
+  width: 24px;
+  height: 24px;
 }
 
 .upload-text {
@@ -782,32 +954,118 @@ onMounted(() => {
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 24px;
-  min-height: 400px;
+  min-height: 520px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .error-message {
   background: #fee;
   color: #c33;
   padding: 12px 16px;
-  border-radius: 8px;
+  border-radius: 10px;
   margin-bottom: 16px;
+  font-size: 14px;
 }
 
 .result-content {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
+  animation: fade-up 0.4s ease;
+}
+
+.result-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--line);
+  flex-wrap: wrap;
+}
+
+.result-tags {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.meta-product {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.meta-tag {
+  display: inline-block;
+  padding: 5px 12px;
+  background: var(--brand);
+  color: white;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.result-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
 }
 
 .result-section {
-  padding: 16px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.5);
+  padding: 18px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.section-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.section-dot--positive {
+  background: var(--green, #1f8a5b);
+}
+
+.section-dot--negative {
+  background: var(--brand, #d95f2d);
+}
+
+.section-dot--complaint {
+  background: #e4393c;
 }
 
 .result-section h3 {
-  font-size: 16px;
-  margin: 0 0 16px 0;
+  font-size: 15px;
+  margin: 0;
   color: var(--brand-dark);
 }
 
@@ -817,6 +1075,7 @@ onMounted(() => {
   align-items: center;
   gap: 24px;
   flex-wrap: wrap;
+  margin-bottom: 20px;
 }
 
 .pie-chart {
@@ -897,6 +1156,45 @@ onMounted(() => {
   color: var(--muted);
 }
 
+.sentiment-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.stat-card--positive {
+  background: rgba(31, 138, 91, 0.08);
+}
+
+.stat-card--neutral {
+  background: rgba(188, 131, 33, 0.08);
+}
+
+.stat-card--negative {
+  background: rgba(217, 95, 45, 0.08);
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.stat-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* 评价列表 */
 .review-list {
   list-style: none;
@@ -908,8 +1206,8 @@ onMounted(() => {
 }
 
 .review-list li {
-  padding: 10px 14px;
-  border-radius: 8px;
+  padding: 12px 16px;
+  border-radius: 10px;
   line-height: 1.5;
   font-size: 14px;
 }
@@ -948,24 +1246,7 @@ onMounted(() => {
   color: var(--brand-dark);
 }
 
-.pain-points {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pain-points li {
-  padding: 10px 14px;
-  background: rgba(217, 95, 45, 0.08);
-  border-radius: 8px;
-  border-left: 3px solid var(--brand);
-  line-height: 1.5;
-  font-size: 14px;
-}
-
+.pain-points,
 .suggestions {
   list-style: none;
   padding: 0;
@@ -975,23 +1256,56 @@ onMounted(() => {
   gap: 8px;
 }
 
+.pain-points li,
 .suggestions li {
-  padding: 10px 14px;
-  background: rgba(31, 138, 91, 0.08);
-  border-radius: 8px;
-  border-left: 3px solid var(--green, #1f8a5b);
+  padding: 12px 16px;
+  border-radius: 10px;
+  border-left: 3px solid var(--brand);
   line-height: 1.5;
   font-size: 14px;
 }
 
+.pain-points li {
+  background: rgba(217, 95, 45, 0.08);
+}
+
+.suggestions li {
+  background: rgba(31, 138, 91, 0.08);
+  border-left-color: var(--green, #1f8a5b);
+}
+
 .empty-state {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
+  min-height: 360px;
   color: var(--muted);
   text-align: center;
-  min-height: 360px;
+}
+
+.empty-icon {
+  width: 72px;
+  height: 72px;
+  color: var(--line);
+  margin-bottom: 16px;
+}
+
+.empty-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 768px) {
@@ -1002,6 +1316,10 @@ onMounted(() => {
   .sentiment-chart {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .sentiment-stats {
+    grid-template-columns: 1fr;
   }
 
   .db-selects {

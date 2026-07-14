@@ -90,12 +90,13 @@ async function handleAvatarChange(event: Event) {
       throw new Error(err.message || `HTTP ${response.status}`)
     }
     const data = await response.json()
-    userInfo.value = data.user || { ...userInfo.value, avatar: data.avatar }
-    // 更新 localStorage
+    const updatedUser = data.user || { ...userInfo.value, avatar: data.avatar }
+    userInfo.value = updatedUser
+    // 同步更新 localStorage，保持登录态信息一致
     const stored = localStorage.getItem('userInfo')
     if (stored) {
       const info = JSON.parse(stored)
-      info.avatar = data.avatar
+      info.avatar = updatedUser.avatar || data.avatar || info.avatar
       localStorage.setItem('userInfo', JSON.stringify(info))
     }
     showToast('头像上传成功')
@@ -182,7 +183,7 @@ async function loadUserInfo() {
           nickname: info.nickname || info.username || '',
           phone: info.phone || '',
           email: info.email || '',
-          avatar: null,
+          avatar: info.avatar || null,
           role: info.role || 'user',
           created_at: info.created_at || '',
         }
@@ -220,12 +221,15 @@ async function saveProfile() {
       throw new Error(err.message || `HTTP ${response.status}`)
     }
     const data = await response.json()
-    userInfo.value = data.user || { ...userInfo.value, ...editForm.value }
-    // 更新 localStorage
+    const updatedUser = data.user || { ...userInfo.value, ...editForm.value }
+    userInfo.value = updatedUser
+    // 同步更新 localStorage，避免刷新后资料回退
     const stored = localStorage.getItem('userInfo')
     if (stored) {
       const info = JSON.parse(stored)
-      info.nickname = editForm.value.nickname
+      info.nickname = updatedUser.nickname || editForm.value.nickname
+      info.phone = updatedUser.phone || editForm.value.phone || info.phone
+      info.email = updatedUser.email || editForm.value.email || info.email
       localStorage.setItem('userInfo', JSON.stringify(info))
     }
     showToast('资料修改成功')
@@ -329,10 +333,6 @@ async function setDefaultAddress(addr: Address) {
   } catch (e) {
     showToast(e instanceof Error ? e.message : '设置失败', 'error')
   }
-}
-
-function formatAddress(addr: Address): string {
-  return `${addr.province}${addr.city}${addr.district}${addr.detail}`
 }
 
 // ---------- 收藏 ----------
@@ -469,10 +469,21 @@ onMounted(() => {
       </div>
 
       <!-- 收货地址管理 -->
-      <div class="up-section">
+      <div class="up-section up-section--address">
         <div class="up-section__header">
-          <h3 class="up-section__title">收货地址</h3>
-          <button class="up-section__add" @click="openAddressModal('add')">+ 新增地址</button>
+          <div class="up-section__title-wrap">
+            <span class="up-section__icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                <circle cx="12" cy="10" r="3"></circle>
+              </svg>
+            </span>
+            <h3 class="up-section__title">收货地址</h3>
+          </div>
+          <button class="up-section__add" @click="openAddressModal('add')">
+            <span class="up-section__add-icon">+</span>
+            <span>新增地址</span>
+          </button>
         </div>
 
         <div v-if="addresses.length > 0" class="up-addr-list">
@@ -481,24 +492,53 @@ onMounted(() => {
             :key="addr.id"
             :class="['up-addr', { 'up-addr--default': addr.is_default }]"
           >
-            <div class="up-addr__info">
-              <div class="up-addr__head">
-                <span class="up-addr__name">{{ addr.recipient }}</span>
-                <span class="up-addr__phone">{{ addr.phone }}</span>
-                <span v-if="addr.is_default" class="up-addr__tag">默认</span>
+            <div class="up-addr__main">
+              <div class="up-addr__pin">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                  <circle cx="12" cy="10" r="3"></circle>
+                </svg>
               </div>
-              <p class="up-addr__detail">{{ formatAddress(addr) }}</p>
+              <div class="up-addr__info">
+                <div class="up-addr__head">
+                  <span class="up-addr__name">{{ addr.recipient }}</span>
+                  <span class="up-addr__phone">{{ addr.phone }}</span>
+                  <span v-if="addr.is_default" class="up-addr__tag">默认</span>
+                </div>
+                <p class="up-addr__detail">
+                  <span class="up-addr__region">{{ addr.province }} {{ addr.city }} {{ addr.district }}</span>
+                  <span class="up-addr__street">{{ addr.detail }}</span>
+                </p>
+              </div>
             </div>
             <div class="up-addr__actions">
-              <button v-if="!addr.is_default" class="up-addr__btn" @click="setDefaultAddress(addr)">设为默认</button>
+              <button
+                v-if="!addr.is_default"
+                class="up-addr__btn up-addr__btn--default"
+                @click="setDefaultAddress(addr)"
+                title="设为默认地址"
+              >
+                <span>设为默认</span>
+              </button>
               <button class="up-addr__btn" @click="openAddressModal('edit', addr)">编辑</button>
               <button class="up-addr__btn up-addr__btn--del" @click="deleteAddress(addr)">删除</button>
             </div>
           </div>
         </div>
         <div v-else class="up-section__empty">
+          <div class="up-section__empty-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+              <line x1="12" y1="22.08" x2="12" y2="12"></line>
+            </svg>
+          </div>
           <p>暂无收货地址</p>
-          <button class="up-section__add" @click="openAddressModal('add')">+ 新增地址</button>
+          <p class="up-section__empty-hint">添加一个地址，购物下单更方便</p>
+          <button class="up-section__add" @click="openAddressModal('add')">
+            <span class="up-section__add-icon">+</span>
+            <span>新增地址</span>
+          </button>
         </div>
       </div>
 
@@ -644,43 +684,68 @@ onMounted(() => {
     <!-- 地址新增/编辑弹窗 -->
     <transition name="modal">
       <div v-if="addressModalVisible" class="up-modal-overlay" @click.self="addressModalVisible = false">
-        <div class="up-modal">
+        <div class="up-modal up-modal--address">
           <div class="up-modal__header">
-            <h2>{{ addressEditMode === 'add' ? '新增地址' : '编辑地址' }}</h2>
+            <div class="up-modal__title-wrap">
+            <span class="up-modal__icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                <circle cx="12" cy="10" r="3"></circle>
+              </svg>
+            </span>
+            <h2>{{ addressEditMode === 'add' ? '新增收货地址' : '编辑收货地址' }}</h2>
+          </div>
             <button class="up-modal__close" @click="addressModalVisible = false">×</button>
           </div>
           <div class="up-modal__body">
-            <div class="up-form-row">
-              <div class="up-form-field">
-                <label>收货人</label>
-                <input v-model="addressForm.recipient" type="text" placeholder="请输入收货人姓名" />
-              </div>
-              <div class="up-form-field">
-                <label>手机号</label>
-                <input v-model="addressForm.phone" type="text" placeholder="请输入手机号" />
-              </div>
-            </div>
-            <div class="up-form-row">
-              <div class="up-form-field">
-                <label>省份</label>
-                <input v-model="addressForm.province" type="text" placeholder="省份" />
-              </div>
-              <div class="up-form-field">
-                <label>城市</label>
-                <input v-model="addressForm.city" type="text" placeholder="城市" />
-              </div>
-              <div class="up-form-field">
-                <label>区/县</label>
-                <input v-model="addressForm.district" type="text" placeholder="区/县" />
+            <div class="up-form-section">
+              <div class="up-form-section__label">联系人信息</div>
+              <div class="up-form-row">
+                <div class="up-form-field">
+                  <label>收货人 <span class="up-form__required">*</span></label>
+                  <input v-model="addressForm.recipient" type="text" placeholder="请输入收货人姓名" />
+                </div>
+                <div class="up-form-field">
+                  <label>手机号 <span class="up-form__required">*</span></label>
+                  <input v-model="addressForm.phone" type="tel" maxlength="11" placeholder="请输入手机号" />
+                </div>
               </div>
             </div>
-            <div class="up-form-field">
-              <label>详细地址</label>
-              <input v-model="addressForm.detail" type="text" placeholder="请输入详细地址" />
+
+            <div class="up-form-section">
+              <div class="up-form-section__label">所在地区</div>
+              <div class="up-form-row up-form-row--3">
+                <div class="up-form-field">
+                  <label>省份</label>
+                  <input v-model="addressForm.province" type="text" placeholder="省份" />
+                </div>
+                <div class="up-form-field">
+                  <label>城市</label>
+                  <input v-model="addressForm.city" type="text" placeholder="城市" />
+                </div>
+                <div class="up-form-field">
+                  <label>区/县</label>
+                  <input v-model="addressForm.district" type="text" placeholder="区/县" />
+                </div>
+              </div>
             </div>
+
+            <div class="up-form-section">
+              <div class="up-form-section__label">详细地址</div>
+              <div class="up-form-field">
+                <label>街道/门牌号 <span class="up-form__required">*</span></label>
+                <textarea
+                  v-model="addressForm.detail"
+                  rows="2"
+                  placeholder="请输入详细地址，如街道、门牌号、楼栋等"
+                ></textarea>
+              </div>
+            </div>
+
             <label class="up-form-check">
               <input type="checkbox" v-model="addressForm.is_default" />
-              <span>设为默认地址</span>
+              <span class="up-form-check__box"></span>
+              <span>设为默认地址（下单时默认使用该地址）</span>
             </label>
           </div>
           <div class="up-modal__footer">
@@ -930,6 +995,26 @@ onMounted(() => {
   margin-bottom: 20px;
 }
 
+.up-section__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.up-section__icon {
+  width: 22px;
+  height: 22px;
+  color: var(--brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.up-section__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
 .up-section__title {
   font-size: 18px;
   margin: 0;
@@ -938,37 +1023,67 @@ onMounted(() => {
 }
 
 .up-section__add {
-  padding: 8px 18px;
-  border: 1px dashed var(--brand);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  border: 1px solid var(--brand);
   border-radius: 999px;
-  background: transparent;
+  background: rgba(217, 95, 45, 0.06);
   color: var(--brand);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .up-section__add:hover {
-  background: rgba(217, 95, 45, 0.06);
+  background: var(--brand);
+  color: #fff;
+}
+
+.up-section__add-icon {
+  font-size: 16px;
+  line-height: 1;
 }
 
 .up-section__empty {
   text-align: center;
-  padding: 40px 20px;
+  padding: 48px 20px;
   color: var(--muted);
   font-size: 14px;
 }
 
+.up-section__empty-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 12px;
+  color: var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.up-section__empty-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.up-section__empty-hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 4px 0 16px;
+}
+
 .up-section__empty button {
-  margin-top: 12px;
+  margin-top: 0;
 }
 
 /* 地址列表 */
 .up-addr-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .up-addr {
@@ -976,34 +1091,65 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  transition: border-color 0.2s;
+  border-radius: 14px;
+  background: var(--panel);
+  transition: all 0.2s ease;
 }
 
 .up-addr:hover {
   border-color: var(--brand);
+  box-shadow: 0 4px 14px rgba(217, 95, 45, 0.08);
 }
 
 .up-addr--default {
   border-color: var(--brand);
-  background: rgba(217, 95, 45, 0.03);
+  background: linear-gradient(135deg, rgba(217, 95, 45, 0.04), rgba(217, 95, 45, 0.01));
+  box-shadow: 0 4px 14px rgba(217, 95, 45, 0.06);
+}
+
+.up-addr__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.up-addr__pin {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(217, 95, 45, 0.1), rgba(217, 95, 45, 0.04));
+  color: var(--brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.up-addr__pin svg {
+  width: 20px;
+  height: 20px;
 }
 
 .up-addr__info {
   flex: 1;
+  min-width: 0;
 }
 
 .up-addr__head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 
 .up-addr__name {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--ink);
 }
@@ -1011,12 +1157,16 @@ onMounted(() => {
 .up-addr__phone {
   font-size: 13px;
   color: var(--muted);
+  background: rgba(0, 0, 0, 0.04);
+  padding: 2px 8px;
+  border-radius: 999px;
 }
 
 .up-addr__tag {
-  padding: 1px 8px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
   font-size: 11px;
+  font-weight: 600;
   color: #fff;
   background: var(--brand);
 }
@@ -1025,7 +1175,19 @@ onMounted(() => {
   margin: 0;
   font-size: 14px;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.up-addr__region {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.up-addr__street {
+  color: var(--muted);
 }
 
 .up-addr__actions {
@@ -1035,12 +1197,13 @@ onMounted(() => {
 }
 
 .up-addr__btn {
-  padding: 5px 12px;
+  padding: 6px 14px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1048,11 +1211,18 @@ onMounted(() => {
 .up-addr__btn:hover {
   border-color: var(--brand);
   color: var(--brand);
+  background: rgba(217, 95, 45, 0.04);
+}
+
+.up-addr__btn--default:hover {
+  border-color: var(--brand);
+  color: var(--brand);
 }
 
 .up-addr__btn--del:hover {
   border-color: #c33;
   color: #c33;
+  background: rgba(204, 51, 51, 0.04);
 }
 
 /* Tab */
@@ -1223,6 +1393,30 @@ onMounted(() => {
   margin: 0;
 }
 
+.up-modal__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.up-modal__icon {
+  width: 24px;
+  height: 24px;
+  color: var(--brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.up-modal__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.up-modal--address {
+  width: min(520px, 100%);
+}
+
 .up-modal__close {
   width: 32px;
   height: 32px;
@@ -1244,18 +1438,27 @@ onMounted(() => {
   padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 /* 表单 */
+.up-form-section__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 10px;
+  padding-left: 10px;
+  border-left: 3px solid var(--brand);
+}
+
 .up-form-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-.up-form-row:first-child {
-  grid-template-columns: 1fr 1fr;
+.up-form-row--3 {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .up-form-field {
@@ -1270,17 +1473,29 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.up-form-field input {
+.up-form__required {
+  color: var(--brand);
+  margin-left: 2px;
+}
+
+.up-form-field input,
+.up-form-field textarea {
   padding: 10px 14px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 14px;
   font-family: inherit;
   background: var(--panel);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.up-form-field input:focus {
+.up-form-field textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.up-form-field input:focus,
+.up-form-field textarea:focus {
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.1);
@@ -1289,17 +1504,49 @@ onMounted(() => {
 .up-form-check {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 14px;
   color: var(--ink);
   cursor: pointer;
+  padding: 4px 0;
 }
 
 .up-form-check input[type='checkbox'] {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-  accent-color: var(--brand);
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.up-form-check__box {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--line);
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.up-form-check__box::after {
+  content: '✓';
+  font-size: 13px;
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.2s;
+}
+
+.up-form-check input[type='checkbox']:checked + .up-form-check__box {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.up-form-check input[type='checkbox']:checked + .up-form-check__box::after {
+  opacity: 1;
+  transform: scale(1);
 }
 
 /* 按钮 */
@@ -1387,6 +1634,11 @@ onMounted(() => {
   .up-addr {
     flex-direction: column;
     align-items: flex-start;
+    gap: 14px;
+  }
+
+  .up-addr__main {
+    width: 100%;
   }
 
   .up-addr__actions {
@@ -1394,7 +1646,8 @@ onMounted(() => {
     justify-content: flex-end;
   }
 
-  .up-form-row {
+  .up-form-row,
+  .up-form-row--3 {
     grid-template-columns: 1fr !important;
   }
 

@@ -60,6 +60,7 @@ def create_product():
             source_url=data.get("source_url", ""),
             platform="manual",
             brand=data.get("brand", ""),
+            is_published=bool(data.get("is_published", True)),
         )
         db.add(product)
         product.display_id = generate_product_display_id(db)
@@ -94,6 +95,8 @@ def update_product(product_id: int):
         for field in ["name", "category", "specs", "selling_points", "source_url"]:
             if field in data:
                 setattr(product, field, data[field])
+        if "is_published" in data:
+            product.is_published = bool(data["is_published"])
         if "price" in data:
             product.price = float(data["price"])
         if "original_price" in data:
@@ -459,7 +462,7 @@ def merchant_revenue_dashboard():
 
 @merchant_bp.get("/merchant/orders")
 def merchant_list_orders():
-    """商家查看所有订单"""
+    """商家查看所有订单（支持状态筛选、关键词搜索、分页）"""
     user, error = require_merchant(request)
     if error:
         return jsonify(error), 401
@@ -467,16 +470,62 @@ def merchant_list_orders():
     page = int(request.args.get("page", 1))
     page_size = int(request.args.get("page_size", 20))
     status = request.args.get("status", "")
+    keyword = request.args.get("keyword", "").strip()
 
     try:
         with SessionLocal() as db:
             stmt = select(Order)
             if status:
                 stmt = stmt.where(Order.status == status)
+
+            # 关键词搜索：订单号、买家用户名、商品名称
+            if keyword:
+                from sqlalchemy import or_
+                # 尝试按订单号或用户ID搜索
+                user_id_filter = None
+                if keyword.isdigit():
+                    user_id_filter = Order.user_id == int(keyword)
+
+                # 先按订单号过滤
+                order_no_filter = Order.order_no.contains(keyword)
+
+                # 再搜索用户名匹配的用户ID
+                user_ids = [
+                    u.id for u in db.execute(
+                        select(User).where(
+                            or_(User.username.contains(keyword), User.nickname.contains(keyword))
+                        )
+                    ).scalars().all()
+                ]
+                user_filter = Order.user_id.in_(user_ids) if user_ids else None
+
+                filters = [order_no_filter]
+                if user_id_filter is not None:
+                    filters.append(user_id_filter)
+                if user_filter is not None:
+                    filters.append(user_filter)
+                stmt = stmt.where(or_(*filters))
+
             total = len(list(db.execute(stmt).scalars().all()))
             total_pages = max(1, (total + page_size - 1) // page_size)
             stmt = stmt.order_by(desc(Order.created_at)).offset((page - 1) * page_size).limit(page_size)
             orders = list(db.execute(stmt).scalars().all())
+
+            # 补充用户名
+            user_ids = {o.user_id for o in orders}
+            users = {}
+            if user_ids:
+                users = {
+                    u.id: u
+                    for u in db.execute(select(User).where(User.id.in_(user_ids))).scalars().all()
+                }
+
+            orders_data = []
+            for o in orders:
+                d = o.to_dict()
+                user = users.get(o.user_id)
+                d["username"] = user.nickname or user.username if user else None
+                orders_data.append(d)
 
             # 状态统计
             status_counts = {}
@@ -490,7 +539,7 @@ def merchant_list_orders():
                 "page_size": page_size,
                 "total_pages": total_pages,
                 "status_counts": status_counts,
-                "orders": [o.to_dict() for o in orders],
+                "orders": orders_data,
             })
     except Exception as e:
         logger.error(f"商家获取订单列表失败: {e}", exc_info=True)
@@ -499,10 +548,16 @@ def merchant_list_orders():
 
 @merchant_bp.post("/merchant/orders/<int:order_id>/ship")
 def merchant_ship_order(order_id: int):
-    """商家发货"""
+    """商家发货，需填写快递单号"""
     user, error = require_merchant(request)
     if error:
         return jsonify(error), 401
+
+    data = request.get_json(silent=True) or {}
+    tracking_no = (data.get("tracking_no") or "").strip()
+
+    if not tracking_no:
+        return jsonify({"error": "invalid_input", "message": "请填写快递单号"}), 400
 
     try:
         with SessionLocal() as db:
@@ -514,12 +569,71 @@ def merchant_ship_order(order_id: int):
                 return jsonify({"error": "invalid_status", "message": f"当前状态({order.status})不可发货，需已付款状态"}), 400
 
             order.status = "shipped"
+            order.tracking_no = tracking_no
             order.shipped_at = datetime.now()
             db.commit()
             db.refresh(order)
             return jsonify({"message": "发货成功", "order": order.to_dict()})
     except Exception as e:
         logger.error(f"商家发货失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
+@merchant_bp.post("/merchant/orders/<int:order_id>/cancel")
+def merchant_cancel_order(order_id: int):
+    """商家取消订单"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    try:
+        with SessionLocal() as db:
+            order = db.get(Order, order_id)
+            if not order:
+                return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+
+            if order.status in ("completed", "cancelled"):
+                return jsonify({"error": "invalid_status", "message": f"当前状态({order.status})不可取消"}), 400
+
+            order.status = "cancelled"
+            order.cancelled_at = datetime.now()
+            db.commit()
+            db.refresh(order)
+            return jsonify({"message": "订单已取消", "order": order.to_dict()})
+    except Exception as e:
+        logger.error(f"商家取消订单失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
+@merchant_bp.post("/merchant/orders/<int:order_id>/complete-return")
+def merchant_complete_return(order_id: int):
+    """商家处理完成退换货"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    data = request.get_json(silent=True) or {}
+    result_status = (data.get("result") or "refunded").strip()
+    if result_status not in ("refunded", "exchanged"):
+        result_status = "refunded"
+
+    try:
+        with SessionLocal() as db:
+            order = db.get(Order, order_id)
+            if not order:
+                return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+
+            if order.status != "returning":
+                return jsonify({"error": "invalid_status", "message": f"当前状态({order.status})不可处理退换货"}), 400
+
+            order.status = "returned"
+            order.return_status = result_status
+            order.return_completed_at = datetime.now()
+            db.commit()
+            db.refresh(order)
+            return jsonify({"message": "退换货已处理完成", "order": order.to_dict()})
+    except Exception as e:
+        logger.error(f"处理退换货失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 

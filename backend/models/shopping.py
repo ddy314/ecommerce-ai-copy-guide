@@ -37,16 +37,24 @@ class Order(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_no: Mapped[str] = mapped_column(String(64), unique=True, comment="订单号")
     user_id: Mapped[int] = mapped_column(Integer, comment="用户ID")
-    status: Mapped[str] = mapped_column(String(20), default="pending", comment="订单状态: pending/paid/shipped/completed/cancelled")
+    status: Mapped[str] = mapped_column(String(20), default="pending", comment="订单状态: pending/paid/shipped/completed/cancelled/returning/returned")
     total_amount: Mapped[float] = mapped_column(Float, default=0, comment="总金额")
     pay_method: Mapped[str] = mapped_column(String(20), nullable=True, comment="支付方式: wechat/alipay")
     address_snapshot: Mapped[str] = mapped_column(Text, nullable=True, comment="收货地址快照(JSON)")
     items_snapshot: Mapped[str] = mapped_column(Text, nullable=True, comment="商品快照(JSON)")
     remark: Mapped[str] = mapped_column(String(500), nullable=True, comment="备注")
+    # 物流与售后
+    tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="发货快递单号")
+    return_tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="退货快递单号")
+    return_status: Mapped[str] = mapped_column(String(20), nullable=True, comment="售后状态: none/returning/refunded/exchanged")
+    return_reason: Mapped[str] = mapped_column(String(500), nullable=True, comment="退换货原因")
+    return_applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    return_completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     shipped_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
 
@@ -62,8 +70,17 @@ class Order(Base):
             "address_snapshot": json.loads(self.address_snapshot) if self.address_snapshot else None,
             "items_snapshot": json.loads(self.items_snapshot) if self.items_snapshot else None,
             "remark": self.remark,
+            "tracking_no": self.tracking_no,
+            "return_tracking_no": self.return_tracking_no,
+            "return_status": self.return_status,
+            "return_reason": self.return_reason,
+            "return_applied_at": self.return_applied_at.isoformat() if self.return_applied_at else None,
+            "return_completed_at": self.return_completed_at.isoformat() if self.return_completed_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "shipped_at": self.shipped_at.isoformat() if self.shipped_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
             "items": [item.to_dict() for item in self.items] if self.items else [],
         }
 

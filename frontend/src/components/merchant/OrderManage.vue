@@ -13,7 +13,7 @@ function authHeaders(extra: Record<string, string> = {}): HeadersInit {
 }
 
 // ---------- 类型定义 ----------
-type OrderStatus = 'all' | 'pending' | 'paid' | 'shipped' | 'completed' | 'cancelled'
+type OrderStatus = 'all' | 'pending' | 'paid' | 'shipped' | 'completed' | 'cancelled' | 'returning' | 'returned'
 
 interface OrderItem {
   product_id: number
@@ -31,6 +31,7 @@ interface AddressSnapshot {
 
 interface Order {
   id: number
+  order_no: string
   user_id: number
   username?: string | null
   status: string
@@ -42,6 +43,8 @@ interface Order {
   cancelled_at: string | null
   items: OrderItem[]
   address_snapshot: AddressSnapshot | null
+  tracking_no?: string | null
+  return_tracking_no?: string | null
 }
 
 interface StatusCounts {
@@ -63,9 +66,21 @@ const pageSize = ref(20)
 const total = ref(0)
 const totalPages = ref(1)
 const statusCounts = ref<StatusCounts>({})
+const searchKeyword = ref('')
 
 // 发货中状态（防止重复点击）
 const shippingIds = ref<Set<number>>(new Set())
+// 取消中状态
+const cancellingIds = ref<Set<number>>(new Set())
+
+// 发货弹窗
+const shipModalVisible = ref(false)
+const pendingShipOrder = ref<Order | null>(null)
+const shipTrackingNo = ref('')
+
+// 取消弹窗
+const cancelModalVisible = ref(false)
+const pendingCancelOrder = ref<Order | null>(null)
 
 // 提示 Toast
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -89,6 +104,8 @@ const statusTabs: { key: OrderStatus; label: string }[] = [
   { key: 'pending', label: '待付款' },
   { key: 'paid', label: '已付款' },
   { key: 'shipped', label: '已发货' },
+  { key: 'returning', label: '退换货中' },
+  { key: 'returned', label: '售后完成' },
   { key: 'completed', label: '已完成' },
   { key: 'cancelled', label: '已取消' },
 ]
@@ -100,6 +117,8 @@ const statusMap: Record<string, { label: string; color: string; bg: string }> = 
   shipped: { label: '已发货', color: '#1677ff', bg: 'rgba(22, 119, 255, 0.12)' },
   completed: { label: '已完成', color: 'var(--muted)', bg: 'rgba(118, 107, 94, 0.12)' },
   cancelled: { label: '已取消', color: '#999', bg: 'rgba(153, 153, 153, 0.14)' },
+  returning: { label: '退换货中', color: '#faad14', bg: 'rgba(250, 173, 20, 0.14)' },
+  returned: { label: '售后完成', color: '#722ed1', bg: 'rgba(114, 46, 209, 0.12)' },
 }
 
 function getStatusInfo(status: string): { label: string; color: string; bg: string } {
@@ -111,6 +130,7 @@ const summaryCards = computed(() => [
   { key: 'pending' as const, label: '待付款', count: statusCounts.value.pending || 0, color: 'var(--brand)' },
   { key: 'paid' as const, label: '已付款', count: statusCounts.value.paid || 0, color: 'var(--green)' },
   { key: 'shipped' as const, label: '已发货', count: statusCounts.value.shipped || 0, color: '#1677ff' },
+  { key: 'returning' as const, label: '退换货中', count: statusCounts.value.returning || 0, color: '#faad14' },
   { key: 'completed' as const, label: '已完成', count: statusCounts.value.completed || 0, color: 'var(--muted)' },
   { key: 'cancelled' as const, label: '已取消', count: statusCounts.value.cancelled || 0, color: '#999' },
 ])
@@ -137,6 +157,7 @@ async function loadOrders() {
     params.set('page', currentPage.value.toString())
     params.set('page_size', pageSize.value.toString())
     if (activeStatus.value !== 'all') params.set('status', activeStatus.value)
+    if (searchKeyword.value.trim()) params.set('keyword', searchKeyword.value.trim())
 
     const res = await fetch(
       `${API_BASE}/api/merchant/orders?${params.toString()}`,
@@ -158,6 +179,17 @@ async function loadOrders() {
   }
 }
 
+function onSearch() {
+  currentPage.value = 1
+  loadOrders()
+}
+
+function clearSearch() {
+  searchKeyword.value = ''
+  currentPage.value = 1
+  loadOrders()
+}
+
 // ---------- 切换状态 Tab ----------
 function selectStatus(status: OrderStatus) {
   if (activeStatus.value === status) return
@@ -174,13 +206,37 @@ function goToPage(page: number) {
 }
 
 // ---------- 发货 ----------
-async function shipOrder(order: Order) {
+function openShipModal(order: Order) {
+  pendingShipOrder.value = order
+  shipTrackingNo.value = order.tracking_no || ''
+  shipModalVisible.value = true
+}
+
+function closeShipModal() {
+  shipModalVisible.value = false
+  pendingShipOrder.value = null
+  shipTrackingNo.value = ''
+}
+
+async function executeShipOrder() {
+  const order = pendingShipOrder.value
+  if (!order) return
+  const trackingNo = shipTrackingNo.value.trim()
+  if (!trackingNo) {
+    showToast('请填写快递单号', 'error')
+    return
+  }
+  closeShipModal()
   if (shippingIds.value.has(order.id)) return
   shippingIds.value.add(order.id)
   try {
     const res = await fetch(
       `${API_BASE}/api/merchant/orders/${order.id}/ship`,
-      { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }) },
+      {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ tracking_no: trackingNo }),
+      },
     )
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -192,6 +248,41 @@ async function shipOrder(order: Order) {
     showToast(e instanceof Error ? e.message : '发货失败', 'error')
   } finally {
     shippingIds.value.delete(order.id)
+  }
+}
+
+// ---------- 取消订单 ----------
+function openCancelModal(order: Order) {
+  pendingCancelOrder.value = order
+  cancelModalVisible.value = true
+}
+
+function closeCancelModal() {
+  cancelModalVisible.value = false
+  pendingCancelOrder.value = null
+}
+
+async function executeCancelOrder() {
+  const order = pendingCancelOrder.value
+  if (!order) return
+  closeCancelModal()
+  if (cancellingIds.value.has(order.id)) return
+  cancellingIds.value.add(order.id)
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/merchant/orders/${order.id}/cancel`,
+      { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }) },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${res.status}`)
+    }
+    showToast('订单已取消', 'success')
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '取消失败', 'error')
+  } finally {
+    cancellingIds.value.delete(order.id)
   }
 }
 
@@ -242,6 +333,19 @@ onMounted(() => {
         <span class="om-summary__count" :style="{ color: card.color }">{{ card.count }}</span>
         <span class="om-summary__label">{{ card.label }}</span>
       </div>
+    </div>
+
+    <!-- 搜索栏 -->
+    <div class="om-search-bar">
+      <input
+        v-model="searchKeyword"
+        type="text"
+        class="om-search-input"
+        placeholder="搜索订单号 / 买家用户名 / 用户ID"
+        @keydown.enter="onSearch"
+      />
+      <button class="om-btn om-btn--primary" @click="onSearch">搜索</button>
+      <button v-if="searchKeyword" class="om-btn om-btn--ghost" @click="clearSearch">清空</button>
     </div>
 
     <!-- 状态筛选 Tab -->
@@ -331,16 +435,30 @@ onMounted(() => {
         <!-- 卡片底部：合计 + 操作 -->
         <div class="om-card__footer">
           <div class="om-card__total">
-            共 {{ itemCount(order) }} 件商品，合计：<strong>¥{{ formatPrice(order.total_amount) }}</strong>
+            <div>共 {{ itemCount(order) }} 件商品，合计：<strong>¥{{ formatPrice(order.total_amount) }}</strong></div>
+            <div v-if="order.tracking_no" class="om-card__tracking">
+              快递单号：{{ order.tracking_no }}
+            </div>
+            <div v-if="order.return_tracking_no" class="om-card__tracking om-card__tracking--return">
+              退货单号：{{ order.return_tracking_no }}
+            </div>
           </div>
           <div class="om-card__actions">
             <button
               v-if="order.status === 'paid'"
               class="om-btn om-btn--primary"
               :disabled="shippingIds.has(order.id)"
-              @click="shipOrder(order)"
+              @click="openShipModal(order)"
             >
               {{ shippingIds.has(order.id) ? '发货中...' : '发货' }}
+            </button>
+            <button
+              v-if="!['completed', 'cancelled'].includes(order.status)"
+              class="om-btn om-btn--danger"
+              :disabled="cancellingIds.has(order.id)"
+              @click="openCancelModal(order)"
+            >
+              {{ cancellingIds.has(order.id) ? '取消中...' : '取消订单' }}
             </button>
           </div>
         </div>
@@ -380,6 +498,64 @@ onMounted(() => {
       <h3>暂无订单</h3>
       <p>当前状态下还没有订单数据</p>
     </div>
+
+    <!-- 发货弹窗 -->
+    <transition name="om-modal">
+      <div v-if="shipModalVisible" class="om-modal-overlay" @click.self="closeShipModal">
+        <div class="om-modal om-modal--sm">
+          <div class="om-modal__header">
+            <h2>填写快递单号</h2>
+            <button class="om-modal__close" @click="closeShipModal">×</button>
+          </div>
+          <div class="om-modal__body">
+            <div class="om-form-group">
+              <label>订单号</label>
+              <div class="om-form-static">{{ pendingShipOrder?.order_no }}</div>
+            </div>
+            <div class="om-form-group">
+              <label>快递公司 / 快递单号 <span class="om-required">*</span></label>
+              <input
+                v-model="shipTrackingNo"
+                type="text"
+                placeholder="例如：顺丰 SF1234567890"
+                @keydown.enter="executeShipOrder"
+              />
+            </div>
+            <div class="om-confirm-actions">
+              <button class="om-btn om-btn--ghost" @click="closeShipModal">取消</button>
+              <button class="om-btn om-btn--primary" :disabled="!shipTrackingNo.trim()" @click="executeShipOrder">确认发货</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 取消订单弹窗 -->
+    <transition name="om-modal">
+      <div v-if="cancelModalVisible" class="om-modal-overlay" @click.self="closeCancelModal">
+        <div class="om-modal om-modal--sm">
+          <div class="om-modal__header">
+            <h2>取消订单</h2>
+            <button class="om-modal__close" @click="closeCancelModal">×</button>
+          </div>
+          <div class="om-modal__body">
+            <div class="om-confirm-body">
+              <div class="om-confirm-icon om-confirm-icon--warning">!</div>
+              <p class="om-confirm-text">确定要取消该订单吗？</p>
+              <p class="om-confirm-hint">订单取消后将无法恢复，已支付金额将按原路退回。</p>
+              <div v-if="pendingCancelOrder" class="om-cancel-order-info">
+                <span>订单号：{{ pendingCancelOrder.order_no }}</span>
+                <span>合计：<strong>¥{{ formatPrice(pendingCancelOrder.total_amount) }}</strong></span>
+              </div>
+            </div>
+            <div class="om-confirm-actions">
+              <button class="om-btn om-btn--ghost" @click="closeCancelModal">再想想</button>
+              <button class="om-btn om-btn--danger" @click="executeCancelOrder">确认取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -720,6 +896,16 @@ onMounted(() => {
   font-weight: 800;
 }
 
+.om-card__tracking {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.om-card__tracking--return {
+  color: #faad14;
+}
+
 .om-card__actions {
   display: flex;
   gap: 10px;
@@ -751,6 +937,41 @@ onMounted(() => {
 .om-btn--primary:hover:not(:disabled) {
   background: var(--brand-dark);
   border-color: var(--brand-dark);
+}
+
+.om-btn--danger {
+  color: #fff;
+  background: #c33;
+  border-color: #c33;
+}
+
+.om-btn--danger:hover:not(:disabled) {
+  background: #a52a2a;
+  border-color: #a52a2a;
+}
+
+/* 搜索栏 */
+.om-search-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.om-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.om-search-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.1);
 }
 
 /* 空状态 */
@@ -825,6 +1046,189 @@ onMounted(() => {
   margin-left: 12px;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* 弹窗 */
+.om-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+
+.om-modal {
+  width: min(520px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+}
+
+.om-modal--sm {
+  width: min(420px, 100%);
+}
+
+.om-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.om-modal__header h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.om-modal__close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 20px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.om-modal__close:hover {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.om-modal__body {
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.om-form-group {
+  margin-bottom: 18px;
+}
+
+.om-form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.om-form-group input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.om-form-group input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.1);
+}
+
+.om-form-static {
+  padding: 11px 14px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.om-required {
+  color: #c33;
+}
+
+.om-confirm-body {
+  text-align: center;
+  padding: 8px 8px 24px;
+}
+
+.om-confirm-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 32px;
+  display: inline-grid;
+  place-items: center;
+  margin-bottom: 16px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+}
+
+.om-confirm-icon--warning {
+  background: linear-gradient(135deg, #faad14, #f59e0b);
+  box-shadow: 0 12px 30px rgba(250, 173, 20, 0.25);
+}
+
+.om-confirm-text {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.om-confirm-hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.om-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.om-cancel-order-info {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.om-cancel-order-info strong {
+  color: var(--brand);
+  font-size: 15px;
+}
+
+.om-modal-enter-active,
+.om-modal-leave-active {
+  transition: opacity 0.25s;
+}
+
+.om-modal-enter-active .om-modal,
+.om-modal-leave-active .om-modal {
+  transition: transform 0.25s;
+}
+
+.om-modal-enter-from,
+.om-modal-leave-to {
+  opacity: 0;
+}
+
+.om-modal-enter-from .om-modal,
+.om-modal-leave-to .om-modal {
+  transform: scale(0.95) translateY(20px);
 }
 
 /* 响应式 */

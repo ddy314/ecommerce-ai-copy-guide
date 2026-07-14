@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import * as XLSX from 'xlsx'
+import html2canvas from 'html2canvas'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -280,6 +282,98 @@ function starRating(rating: number): string {
   return rating.toFixed(1)
 }
 
+// ---------- 导出功能 ----------
+function exportTopProductsExcel() {
+  if (!sortedProducts.value.length) return
+  const rows = sortedProducts.value.map((p, idx) => ({
+    排名: idx + 1,
+    商品名称: p.name,
+    分类: p.category,
+    价格: p.price,
+    销量: p.sales_count,
+    评价数: p.review_count,
+    评分: p.rating,
+    流量指数: p.traffic_score,
+  }))
+  const ws = XLSX.utils.json_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'TOP商品流量榜')
+  XLSX.writeFile(wb, `TOP商品流量榜_${new Date().toISOString().slice(0, 10)}.xlsx`)
+}
+
+function exportDashboardExcel() {
+  if (!data.value) return
+  const wb = XLSX.utils.book_new()
+
+  // KPI
+  const kpiRows = kpiCards.value.map((c) => ({ 指标: c.label, 数值: c.value, 说明: c.sub }))
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kpiRows), '核心指标')
+
+  // 日营收
+  if (dailyRevenue.value.length) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(dailyRevenue.value.map((d) => ({ 日期: d.date, 营收: d.revenue }))),
+      '日营收趋势',
+    )
+  }
+
+  // 日订单
+  if (dailyOrders.value.length) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(dailyOrders.value.map((d) => ({ 日期: d.date, 订单数: d.count }))),
+      '日订单趋势',
+    )
+  }
+
+  // 分类分布
+  if (categoryCountsList.value.length) {
+    const catRows = categoryCountsList.value.map((c, i) => ({
+      分类: c.name,
+      商品数量: c.value,
+      销量: categorySalesList.value[i]?.value ?? 0,
+    }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), '分类分布')
+  }
+
+  // TOP 商品
+  if (sortedProducts.value.length) {
+    const topRows = sortedProducts.value.map((p, idx) => ({
+      排名: idx + 1,
+      商品名称: p.name,
+      分类: p.category,
+      价格: p.price,
+      销量: p.sales_count,
+      评价数: p.review_count,
+      评分: p.rating,
+      流量指数: p.traffic_score,
+    }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(topRows), 'TOP商品')
+  }
+
+  XLSX.writeFile(wb, `数据看板_${new Date().toISOString().slice(0, 10)}.xlsx`)
+}
+
+async function exportDashboardJpg() {
+  const el = document.querySelector('.rd-page') as HTMLElement | null
+  if (!el) return
+  try {
+    const canvas = await html2canvas(el, {
+      backgroundColor: '#ffffff',
+      scale: 2,
+      useCORS: true,
+    })
+    const link = document.createElement('a')
+    link.download = `数据看板_${new Date().toISOString().slice(0, 10)}.jpg`
+    link.href = canvas.toDataURL('image/jpeg', 0.92)
+    link.click()
+  } catch (e) {
+    console.error('导出图片失败:', e)
+    alert('导出图片失败，请重试')
+  }
+}
+
 // ---------- 加载数据 ----------
 async function loadDashboard() {
   loading.value = true
@@ -314,10 +408,18 @@ onMounted(() => {
         <h2 class="rd-header__title">数据看板</h2>
         <p class="rd-header__subtitle">实时洞察店铺营收、订单与商品流量趋势</p>
       </div>
-      <button class="rd-header__refresh" :disabled="loading" @click="loadDashboard">
-        <span class="rd-refresh-icon" :class="{ spinning: loading }">↻</span>
-        {{ loading ? '刷新中' : '刷新数据' }}
-      </button>
+      <div class="rd-header__actions">
+        <button class="rd-header__btn" :disabled="!data" @click="exportDashboardExcel">
+          导出 Excel
+        </button>
+        <button class="rd-header__btn" :disabled="!data" @click="exportDashboardJpg">
+          导出 JPG
+        </button>
+        <button class="rd-header__refresh" :disabled="loading" @click="loadDashboard">
+          <span class="rd-refresh-icon" :class="{ spinning: loading }">↻</span>
+          {{ loading ? '刷新中' : '刷新数据' }}
+        </button>
+      </div>
     </header>
 
     <!-- 错误提示 -->
@@ -532,7 +634,12 @@ onMounted(() => {
             <h3 class="rd-section__title">TOP 10 商品流量榜</h3>
             <p class="rd-section__subtitle">销量与评价综合热度排行</p>
           </div>
-          <span class="rd-section__hint">点击表头可排序</span>
+          <div class="rd-table-actions">
+            <button class="rd-header__btn rd-header__btn--sm" :disabled="!sortedProducts.length" @click="exportTopProductsExcel">
+              导出本表 Excel
+            </button>
+            <span class="rd-section__hint">点击表头可排序</span>
+          </div>
         </div>
         <div v-if="sortedProducts.length" class="rd-table-wrap">
           <table class="rd-table">
@@ -674,6 +781,52 @@ onMounted(() => {
 .rd-header__refresh:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.rd-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rd-header__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border: 1px solid var(--line, #e8e4df);
+  border-radius: 999px;
+  background: var(--panel, #fff);
+  color: var(--ink, #2c2c2c);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: var(--shadow, 0 1px 4px rgba(0,0,0,0.04));
+}
+
+.rd-header__btn:hover:not(:disabled) {
+  border-color: var(--brand, #d95f2d);
+  color: var(--brand, #d95f2d);
+  transform: translateY(-1px);
+}
+
+.rd-header__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rd-header__btn--sm {
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
+.rd-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .rd-refresh-icon {

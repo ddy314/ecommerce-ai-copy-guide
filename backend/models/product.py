@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import String, Text, Float, Integer, DateTime, JSON
+from sqlalchemy import String, Text, Float, Integer, DateTime, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -32,6 +32,7 @@ class Product(Base):
     rating: Mapped[float] = mapped_column(Float, nullable=True, default=5.0, comment="评分")
     review_count: Mapped[int] = mapped_column(Integer, default=0, comment="评论数")
     display_id: Mapped[str] = mapped_column(String(64), nullable=True, unique=True, comment="展示ID")
+    is_published: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否上架")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -60,5 +61,6 @@ class Product(Base):
             "rating": self.rating or 5.0,
             "review_count": self.review_count or 0,
             "display_id": self.display_id or "",
+            "is_published": self.is_published if self.is_published is not None else True,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -4,7 +4,7 @@ import { ref, computed, onMounted } from 'vue'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // ---------- 类型定义 ----------
-type OrderStatus = 'all' | 'pending' | 'paid' | 'shipped' | 'completed' | 'cancelled'
+type OrderStatus = 'all' | 'pending' | 'paid' | 'shipped' | 'completed' | 'cancelled' | 'returning' | 'returned'
 
 interface OrderItem {
   product_id: number
@@ -28,6 +28,12 @@ interface Order {
   cancelled_at: string | null
   address: string | null
   items: OrderItem[]
+  tracking_no?: string | null
+  return_tracking_no?: string | null
+  return_status?: string | null
+  return_reason?: string | null
+  return_applied_at?: string | null
+  return_completed_at?: string | null
 }
 
 interface ReviewMediaItem {
@@ -56,6 +62,10 @@ const detailOrder = ref<Order | null>(null)
 const confirmVisible = ref(false)
 const pendingConfirmOrder = ref<Order | null>(null)
 
+// 取消订单弹窗
+const cancelVisible = ref(false)
+const pendingCancelOrder = ref<Order | null>(null)
+
 // 评价弹窗
 const reviewVisible = ref(false)
 const reviewLoading = ref(false)
@@ -71,6 +81,21 @@ const reviewForm = ref({
 const reviewImages = ref<ReviewMediaItem[]>([])
 const reviewVideos = ref<ReviewMediaItem[]>([])
 const reviewUploading = ref(false)
+
+// 退换货弹窗
+const returnVisible = ref(false)
+const returnLoading = ref(false)
+const returnOrder = ref<Order | null>(null)
+const returnForm = ref({
+  return_type: 'return' as 'return' | 'exchange',
+  reason: '',
+})
+
+// 退货快递单号弹窗
+const returnTrackingVisible = ref(false)
+const returnTrackingLoading = ref(false)
+const returnTrackingOrder = ref<Order | null>(null)
+const returnTrackingNo = ref('')
 
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -103,6 +128,8 @@ const statusTabs: { key: OrderStatus; label: string }[] = [
   { key: 'pending', label: '待付款' },
   { key: 'paid', label: '已付款' },
   { key: 'shipped', label: '已发货' },
+  { key: 'returning', label: '退换货中' },
+  { key: 'returned', label: '售后完成' },
   { key: 'completed', label: '已完成' },
   { key: 'cancelled', label: '已取消' },
 ]
@@ -114,6 +141,8 @@ const statusMap: Record<string, { label: string; color: string }> = {
   shipped: { label: '已发货', color: '#1677ff' },
   completed: { label: '已完成', color: 'var(--muted)' },
   cancelled: { label: '已取消', color: '#999' },
+  returning: { label: '退换货中', color: '#faad14' },
+  returned: { label: '售后完成', color: '#722ed1' },
 }
 
 function getStatusInfo(status: string): { label: string; color: string } {
@@ -218,9 +247,23 @@ async function payOrder(order: Order, event?: Event) {
 }
 
 // ---------- 取消订单 ----------
-async function cancelOrder(order: Order, event?: Event) {
+const CANCELLABLE_STATUSES = ['pending', 'paid']
+
+function showCancelModal(order: Order, event?: Event) {
   event?.stopPropagation()
-  if (!confirm('确定要取消该订单吗？')) return
+  pendingCancelOrder.value = order
+  cancelVisible.value = true
+}
+
+function closeCancelModal() {
+  cancelVisible.value = false
+  pendingCancelOrder.value = null
+}
+
+async function executeCancelOrder() {
+  const order = pendingCancelOrder.value
+  if (!order) return
+  closeCancelModal()
   try {
     const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/cancel`, {
       method: 'POST',
@@ -401,6 +444,98 @@ function skipReview() {
   closeReviewModal()
 }
 
+// ---------- 退换货 ----------
+function canApplyReturn(order: Order): boolean {
+  return !['pending', 'cancelled', 'returning', 'returned'].includes(order.status)
+}
+
+function showReturnModal(order: Order, event?: Event) {
+  event?.stopPropagation()
+  returnOrder.value = order
+  returnForm.value = { return_type: 'return', reason: '' }
+  returnVisible.value = true
+}
+
+function closeReturnModal() {
+  returnVisible.value = false
+  returnOrder.value = null
+  returnForm.value = { return_type: 'return', reason: '' }
+}
+
+async function submitReturn() {
+  const order = returnOrder.value
+  if (!order) return
+  if (!returnForm.value.reason.trim()) {
+    showToast('请填写退换货原因', 'error')
+    return
+  }
+  returnLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/apply-return`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        return_type: returnForm.value.return_type,
+        reason: returnForm.value.reason.trim(),
+      }),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('退换货申请已提交')
+    closeReturnModal()
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '申请失败', 'error')
+  } finally {
+    returnLoading.value = false
+  }
+}
+
+// ---------- 退货快递单号 ----------
+function showReturnTrackingModal(order: Order, event?: Event) {
+  event?.stopPropagation()
+  returnTrackingOrder.value = order
+  returnTrackingNo.value = order.return_tracking_no || ''
+  returnTrackingVisible.value = true
+}
+
+function closeReturnTrackingModal() {
+  returnTrackingVisible.value = false
+  returnTrackingOrder.value = null
+  returnTrackingNo.value = ''
+}
+
+async function submitReturnTracking() {
+  const order = returnTrackingOrder.value
+  if (!order) return
+  const trackingNo = returnTrackingNo.value.trim()
+  if (!trackingNo) {
+    showToast('请填写退货快递单号', 'error')
+    return
+  }
+  returnTrackingLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/return-tracking`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ tracking_no: trackingNo }),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('退货快递单号已提交')
+    closeReturnTrackingModal()
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '提交失败', 'error')
+  } finally {
+    returnTrackingLoading.value = false
+  }
+}
+
 // ---------- 格式化 ----------
 function formatPrice(price: number | null | undefined): string {
   if (price == null) return '--'
@@ -502,21 +637,39 @@ onMounted(() => {
             合计：<strong>¥{{ formatPrice(order.total_amount) }}</strong>
           </div>
           <div class="mo-card__actions" @click.stop>
-            <!-- 待付款 -->
+            <!-- 待付款 / 已付款：可取消 + 可支付 -->
             <template v-if="order.status === 'pending'">
-              <button class="mo-btn mo-btn--ghost" @click="cancelOrder(order, $event)">取消订单</button>
+              <button class="mo-btn mo-btn--ghost" @click="showCancelModal(order, $event)">取消订单</button>
               <button class="mo-btn mo-btn--primary" @click="payOrder(order, $event)">去支付</button>
             </template>
             <!-- 已付款 — 等待商家发货 -->
             <template v-else-if="order.status === 'paid'">
+              <button class="mo-btn mo-btn--ghost" @click="showCancelModal(order, $event)">取消订单</button>
               <span class="mo-btn mo-btn--hint">等待商家发货</span>
             </template>
             <!-- 已发货 -->
             <template v-else-if="order.status === 'shipped'">
+              <button class="mo-btn mo-btn--ghost" @click="showReturnModal(order, $event)">退换货</button>
               <button class="mo-btn mo-btn--primary" @click="showConfirmModal(order, $event)">确认收货</button>
             </template>
+            <!-- 已完成 -->
+            <template v-else-if="order.status === 'completed'">
+              <button class="mo-btn mo-btn--ghost" @click="showReturnModal(order, $event)">退换货</button>
+              <button class="mo-btn mo-btn--ghost" @click="openDetail(order)">查看详情</button>
+            </template>
+            <!-- 退换货中 -->
+            <template v-else-if="order.status === 'returning'">
+              <button
+                v-if="order.return_applied_at && !order.return_tracking_no"
+                class="mo-btn mo-btn--primary"
+                @click="showReturnTrackingModal(order, $event)"
+              >
+                填写退货单号
+              </button>
+              <button class="mo-btn mo-btn--ghost" @click="openDetail(order)">查看详情</button>
+            </template>
             <!-- 其他状态 -->
-            <button class="mo-btn mo-btn--ghost" @click="openDetail(order)">查看详情</button>
+            <button v-else class="mo-btn mo-btn--ghost" @click="openDetail(order)">查看详情</button>
           </div>
         </div>
       </div>
@@ -616,6 +769,18 @@ onMounted(() => {
                   <span class="mo-detail-item__label">取消时间</span>
                   <span class="mo-detail-item__value">{{ formatTime(detailOrder.cancelled_at) }}</span>
                 </div>
+                <div v-if="detailOrder.tracking_no" class="mo-detail-item">
+                  <span class="mo-detail-item__label">快递单号</span>
+                  <span class="mo-detail-item__value">{{ detailOrder.tracking_no }}</span>
+                </div>
+                <div v-if="detailOrder.return_tracking_no" class="mo-detail-item">
+                  <span class="mo-detail-item__label">退货单号</span>
+                  <span class="mo-detail-item__value">{{ detailOrder.return_tracking_no }}</span>
+                </div>
+                <div v-if="detailOrder.return_reason" class="mo-detail-item mo-detail-item--full">
+                  <span class="mo-detail-item__label">售后原因</span>
+                  <span class="mo-detail-item__value">{{ detailOrder.return_reason }}</span>
+                </div>
               </div>
             </div>
 
@@ -676,11 +841,11 @@ onMounted(() => {
             </div>
 
             <!-- 操作按钮 -->
-            <div v-if="detailOrder.status === 'pending' || detailOrder.status === 'paid' || detailOrder.status === 'shipped'" class="mo-detail-actions">
+            <div class="mo-detail-actions">
               <button
-                v-if="detailOrder.status === 'pending'"
+                v-if="CANCELLABLE_STATUSES.includes(detailOrder.status)"
                 class="mo-btn mo-btn--ghost"
-                @click="cancelOrder(detailOrder); closeDetail()"
+                @click="showCancelModal(detailOrder); closeDetail()"
               >
                 取消订单
               </button>
@@ -699,10 +864,31 @@ onMounted(() => {
               </span>
               <button
                 v-if="detailOrder.status === 'shipped'"
+                class="mo-btn mo-btn--ghost"
+                @click="showReturnModal(detailOrder); closeDetail()"
+              >
+                退换货
+              </button>
+              <button
+                v-if="detailOrder.status === 'shipped'"
                 class="mo-btn mo-btn--primary"
                 @click="showConfirmModal(detailOrder); closeDetail()"
               >
                 确认收货
+              </button>
+              <button
+                v-if="canApplyReturn(detailOrder)"
+                class="mo-btn mo-btn--ghost"
+                @click="showReturnModal(detailOrder); closeDetail()"
+              >
+                申请售后
+              </button>
+              <button
+                v-if="detailOrder.status === 'returning' && !detailOrder.return_tracking_no"
+                class="mo-btn mo-btn--primary"
+                @click="showReturnTrackingModal(detailOrder); closeDetail()"
+              >
+                填写退货单号
               </button>
             </div>
           </div>
@@ -720,13 +906,42 @@ onMounted(() => {
           </div>
           <div class="mo-modal__body">
             <div class="mo-confirm-body">
-              <div class="mo-confirm-icon">✓</div>
+              <div class="mo-confirm-icon mo-confirm-icon--success">✓</div>
               <p class="mo-confirm-text">确认已收到商品并完成订单吗？</p>
               <p class="mo-confirm-hint">确认后订单状态将变为“已完成”，您也可以稍后对该商品进行评价。</p>
             </div>
             <div class="mo-confirm-actions">
               <button class="mo-btn mo-btn--ghost" @click="closeConfirmModal">再等等</button>
               <button class="mo-btn mo-btn--primary" @click="executeConfirmReceipt">确认收货</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 取消订单弹窗 -->
+    <transition name="modal">
+      <div v-if="cancelVisible" class="mo-modal-overlay" @click.self="closeCancelModal">
+        <div class="mo-modal mo-modal--sm">
+          <div class="mo-modal__header">
+            <h2>取消订单</h2>
+            <button class="mo-modal__close" @click="closeCancelModal">×</button>
+          </div>
+          <div class="mo-modal__body">
+            <div class="mo-confirm-body">
+              <div class="mo-confirm-icon mo-confirm-icon--warning">!</div>
+              <p class="mo-confirm-text">确定要取消该订单吗？</p>
+              <p class="mo-confirm-hint">
+                订单取消后将无法恢复，{{ pendingCancelOrder?.status === 'paid' ? '已支付金额将按原路退回。' : '无需支付任何费用。' }}
+              </p>
+              <div v-if="pendingCancelOrder" class="mo-cancel-order-info">
+                <span>订单号：{{ pendingCancelOrder.order_no }}</span>
+                <span>合计：<strong>¥{{ formatPrice(pendingCancelOrder.total_amount) }}</strong></span>
+              </div>
+            </div>
+            <div class="mo-confirm-actions">
+              <button class="mo-btn mo-btn--ghost" @click="closeCancelModal">再想想</button>
+              <button class="mo-btn mo-btn--danger" @click="executeCancelOrder">确认取消</button>
             </div>
           </div>
         </div>
@@ -843,6 +1058,88 @@ onMounted(() => {
                 @click="submitReview"
               >
                 提交评价
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 退换货弹窗 -->
+    <transition name="modal">
+      <div v-if="returnVisible" class="mo-modal-overlay" @click.self="closeReturnModal">
+        <div class="mo-modal mo-modal--sm">
+          <div class="mo-modal__header">
+            <h2>申请退换货</h2>
+            <button class="mo-modal__close" @click="closeReturnModal">×</button>
+          </div>
+          <div class="mo-modal__body">
+            <div class="mo-form-group">
+              <label>服务类型</label>
+              <div class="mo-return-types">
+                <label :class="['mo-return-type', { active: returnForm.return_type === 'return' }]">
+                  <input v-model="returnForm.return_type" type="radio" value="return" />
+                  <span>退货</span>
+                </label>
+                <label :class="['mo-return-type', { active: returnForm.return_type === 'exchange' }]">
+                  <input v-model="returnForm.return_type" type="radio" value="exchange" />
+                  <span>换货</span>
+                </label>
+              </div>
+            </div>
+            <div class="mo-form-group">
+              <label>原因描述 <span class="mo-required">*</span></label>
+              <textarea
+                v-model="returnForm.reason"
+                class="mo-review-textarea"
+                rows="4"
+                placeholder="请填写退换货原因，例如：尺码不合适 / 商品破损 / 与描述不符"
+              ></textarea>
+            </div>
+            <div class="mo-confirm-actions">
+              <button class="mo-btn mo-btn--ghost" @click="closeReturnModal">取消</button>
+              <button
+                class="mo-btn mo-btn--primary"
+                :disabled="returnLoading || !returnForm.reason.trim()"
+                @click="submitReturn"
+              >
+                {{ returnLoading ? '提交中...' : '提交申请' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 退货快递单号弹窗 -->
+    <transition name="modal">
+      <div v-if="returnTrackingVisible" class="mo-modal-overlay" @click.self="closeReturnTrackingModal">
+        <div class="mo-modal mo-modal--sm">
+          <div class="mo-modal__header">
+            <h2>填写退货快递单号</h2>
+            <button class="mo-modal__close" @click="closeReturnTrackingModal">×</button>
+          </div>
+          <div class="mo-modal__body">
+            <p class="mo-confirm-hint" style="text-align:left;margin-bottom:16px;">
+              商家已同意退换货，请将商品寄回并填写快递单号，方便商家跟进。
+            </p>
+            <div class="mo-form-group">
+              <label>退货快递单号 <span class="mo-required">*</span></label>
+              <input
+                v-model="returnTrackingNo"
+                type="text"
+                placeholder="例如：顺丰 SF1234567890"
+                @keydown.enter="submitReturnTracking"
+              />
+            </div>
+            <div class="mo-confirm-actions">
+              <button class="mo-btn mo-btn--ghost" @click="closeReturnTrackingModal">取消</button>
+              <button
+                class="mo-btn mo-btn--primary"
+                :disabled="returnTrackingLoading || !returnTrackingNo.trim()"
+                @click="submitReturnTracking"
+              >
+                {{ returnTrackingLoading ? '提交中...' : '确认提交' }}
               </button>
             </div>
           </div>
@@ -1141,6 +1438,34 @@ onMounted(() => {
 
 .mo-btn--primary:hover {
   background: var(--brand-dark);
+}
+
+.mo-btn--danger {
+  color: #fff;
+  background: #c33;
+  border-color: #c33;
+}
+
+.mo-btn--danger:hover {
+  background: #a52a2a;
+}
+
+.mo-cancel-order-info {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.mo-cancel-order-info strong {
+  color: var(--brand);
+  font-size: 15px;
 }
 
 /* 空状态 */
@@ -1475,13 +1800,22 @@ onMounted(() => {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--green), #10b981);
   color: #fff;
   font-size: 32px;
   display: inline-grid;
   place-items: center;
   margin-bottom: 16px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+}
+
+.mo-confirm-icon--success {
+  background: linear-gradient(135deg, var(--green), #10b981);
   box-shadow: 0 12px 30px rgba(52, 211, 153, 0.25);
+}
+
+.mo-confirm-icon--warning {
+  background: linear-gradient(135deg, #faad14, #f59e0b);
+  box-shadow: 0 12px 30px rgba(250, 173, 20, 0.25);
 }
 
 .mo-confirm-text {
@@ -1740,6 +2074,38 @@ onMounted(() => {
   justify-content: flex-end;
   padding-top: 20px;
   border-top: 1px solid var(--line);
+}
+
+/* 退换货类型选择 */
+.mo-return-types {
+  display: flex;
+  gap: 12px;
+}
+
+.mo-return-type {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.mo-return-type input {
+  display: none;
+}
+
+.mo-return-type.active,
+.mo-return-type:hover {
+  border-color: var(--brand);
+  background: rgba(217, 95, 45, 0.06);
+  color: var(--brand);
 }
 
 /* 弹窗过渡 */

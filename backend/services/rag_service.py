@@ -753,18 +753,33 @@ class RAGService:
     def _answer_recommend(
         self, product: Product, related: list[Product], question: str, knowledge_context: str = ""
     ) -> str:
-        """推荐/导购问题 - 用真实商品数据推荐"""
-        parts = [f"根据您的需求，为您推荐「{product.name}」："]
-        parts.append(f"• 价格：¥{product.price or 0:.0f}")
-        parts.append(f"• 评分：{product.rating or 5.0} 分（{product.review_count or 0} 条评价）")
-        if product.brand:
-            parts.append(f"• 品牌：{self._get_real_brand(product)}")
+        """推荐/导购问题 - 用真实商品数据推荐，语气更自然"""
+        brand = self._get_real_brand(product)
+        price = product.price or 0
+        rating = product.rating or 5.0
+        review_count = product.review_count or 0
+
+        parts = [f"根据您的需求，我为您挑选了「{product.name}」："]
+        parts.append(f"• 价格：¥{price:.0f}")
+        parts.append(f"• 评分：{rating} 分（{review_count} 条评价）")
+        if brand and brand not in ("苏宁自营", "", "无", "未知", "通用"):
+            parts.append(f"• 品牌：{brand}")
         if product.selling_points:
             parts.append(f"• 亮点：{product.selling_points[:100]}")
         parts.append(f"• 分类：{product.category or '综合'}")
 
         if knowledge_context:
             parts.append(f"\n商品知识：\n{knowledge_context}")
+
+        # 推荐理由
+        if rating >= 4.5 and review_count >= 10:
+            parts.append(f"\n推荐理由：这款商品评分和口碑都很出色，是同类中的热门选择。")
+        elif price > 0 and related:
+            avg_price = sum(p.price or 0 for p in related) / len(related) if related else price
+            if price <= avg_price * 0.9:
+                parts.append(f"\n推荐理由：价格低于同类均价，性价比较高。")
+            else:
+                parts.append(f"\n推荐理由：综合评分稳定，适合大多数用户选择。")
 
         if related:
             parts.append(f"\n同分类其他优质选择：")
@@ -773,6 +788,7 @@ class RAGService:
                     f"  {i}. 「{p.name}」¥{p.price or 0:.0f} | {p.rating or 5.0}分 | {p.review_count or 0}条评价"
                 )
 
+        parts.append(f"\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
         return "\n".join(parts)
 
     def _get_real_brand(self, product: Product) -> str:
@@ -915,19 +931,55 @@ class RAGService:
     def _answer_after_sale(
         self, product: Product, question: str, knowledge_context: str = ""
     ) -> str:
-        """售后问题"""
-        parts = [f"「{product.name}」售后政策："]
+        """售后问题：结合知识库，避免千篇一律"""
+        parts = [f"关于「{product.name}」的售后政策："]
+
         if knowledge_context:
-            parts.append(f"商品知识参考：\n{knowledge_context}")
-        parts.extend([
-            "• 支持 7 天无理由退换货",
-            "• 质量问题 30 天内包退换",
-            "• 提供一年质保服务",
-            "• 全国联保，支持就近售后",
-            "",
-            f"该商品定价 ¥{product.price or 0:.0f}，属于{product.category or '综合'}分类。"
-            f"如有售后问题，请联系客服或提交售后申请。",
-        ])
+            parts.append(f"\n商品专属说明：\n{knowledge_context}")
+
+        # 根据问题关键词调整回答侧重点
+        q_lower = question.lower()
+        if any(kw in q_lower for kw in ["退", "换", "无理由"]):
+            parts.append(
+                "\n退换货服务：\n"
+                "• 支持 7 天无理由退换货（需保持商品完好）；\n"
+                "• 质量问题 30 天内可申请退换，运费由商家承担；\n"
+                "• 非质量问题的退换货，一般需要您承担退回运费。"
+            )
+        elif any(kw in q_lower for kw in ["保修", "质保", "维修", "坏", "故障"]):
+            parts.append(
+                "\n保修/质保服务：\n"
+                "• 提供一年质保服务（部分商品以详情页说明为准）；\n"
+                "• 全国联保，可就近选择授权售后点；\n"
+                "• 保留好订单和发票，可加快售后处理。"
+            )
+        elif any(kw in q_lower for kw in ["运费", "邮费", "快递"]):
+            parts.append(
+                "\n运费说明：\n"
+                "• 因质量问题产生的退换货，退回运费由商家承担；\n"
+                "• 7 天无理由退换货，退回运费一般由买家承担；\n"
+                "• 具体以商品详情页公示为准。"
+            )
+        elif any(kw in q_lower for kw in ["发票", "电子发票"]):
+            parts.append(
+                "\n发票服务：\n"
+                "• 下单时可在备注栏填写发票信息；\n"
+                "• 支持开具电子普通发票；\n"
+                "• 如需增值税专用发票，请联系商家客服。"
+            )
+        else:
+            parts.append(
+                "\n平台通用售后保障：\n"
+                "• 支持 7 天无理由退换货；\n"
+                "• 质量问题 30 天内包退换；\n"
+                "• 提供一年质保服务；\n"
+                "• 全国联保，支持就近售后。"
+            )
+
+        parts.append(
+            f"\n该商品定价 ¥{product.price or 0:.0f}，属于{product.category or '综合'}分类。"
+            f"如需进一步协助，可以在订单详情页提交售后申请，或随时问我。"
+        )
         return "\n".join(parts)
 
     def _answer_compare(self, product: Product, related: list[Product], question: str) -> str:
@@ -963,12 +1015,18 @@ class RAGService:
         self, product: Product, reviews: list[Review], related: list[Product],
         question: str, knowledge_context: str = ""
     ) -> str:
-        """通用问题 - 综合所有数据回答"""
-        parts = [f"关于「{product.name}」："]
+        """通用问题 - 综合所有数据，回答更自然"""
+        brand = self._get_real_brand(product)
+        price = product.price or 0
+        rating = product.rating or 5.0
+        review_count = product.review_count or 0
+
+        parts = [f"为您介绍一下「{product.name}」："]
         parts.append(f"• 分类：{product.category or '综合'}")
-        parts.append(f"• 品牌：{self._get_real_brand(product)}")
-        parts.append(f"• 价格：¥{product.price or 0:.0f}")
-        parts.append(f"• 评分：{product.rating or 5.0} 分（{product.review_count or 0} 条评价）")
+        if brand and brand not in ("苏宁自营", "", "无", "未知", "通用"):
+            parts.append(f"• 品牌：{brand}")
+        parts.append(f"• 价格：¥{price:.0f}")
+        parts.append(f"• 评分：{rating} 分（{review_count} 条评价）")
 
         if product.selling_points:
             parts.append(f"• 亮点：{product.selling_points[:100]}")
@@ -977,37 +1035,118 @@ class RAGService:
             parts.append(f"\n商品知识参考：\n{knowledge_context}")
 
         if reviews:
-            # 展示1条代表性评论
+            # 优先展示一条有内容的代表性评论
             best_review = max(reviews[:5], key=lambda r: len(r.content or "")) if reviews else None
             if best_review and best_review.content:
                 parts.append(f"\n用户评价摘录：")
                 parts.append(f"  「{best_review.content[:100]}」")
 
-        parts.append(f"\n如果您想了解更多细节，可以直接问我价格、功能、评价等方面的问题！")
+        # 根据评分给出购买建议
+        if rating >= 4.5 and review_count >= 10:
+            parts.append(f"\n综合来看，这款商品评分高、评价多，口碑不错，值得考虑～")
+        elif rating >= 4.0:
+            parts.append(f"\n这款商品整体评价尚可，您可以根据自己的需求再对比看看。")
+        else:
+            parts.append(f"\n这款商品评分一般，建议您多看看评价细节后再做决定。")
+
+        parts.append(f"\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
 
         return "\n".join(parts)
 
     def _build_no_match_answer(self, question: str, q_type: str) -> str:
-        """数据库未匹配到商品时的回答"""
-        # 检查是否是品牌问题
+        """数据库未匹配到商品时的回答：更温暖、更具引导性"""
+        q_lower = question.lower()
+
+        # 品牌问题：结合品牌知识库给出介绍，并推荐相关商品
         for brand_key, info in BRAND_KNOWLEDGE.items():
-            if brand_key in question:
-                return f"关于{brand_key}：\n{info}\n\n如果您想了解具体商品，可以告诉我商品名称或分类，我帮您查找！"
+            if brand_key.lower() in q_lower:
+                return (
+                    f"关于 {brand_key}：{info}\n\n"
+                    f"我们平台上也有不少 {brand_key} 的商品，"
+                    f"您可以直接告诉我具体想了解的型号或品类（比如「{brand_key} 耳机」），我帮您挑几款合适的～"
+                )
 
-        # 检查是否是通用购物问题
-        if any(kw in question for kw in ["怎么买", "如何下单", "怎么下单", "怎么购买"]):
-            return "您可以：\n1. 在「商品浏览」页面浏览所有商品\n2. 点击商品卡片查看详情\n3. 选择数量后点击「加入购物车」或「立即购买」\n4. 在购物车页面确认后提交订单\n\n有什么其他问题可以随时问我！"
+        # 通用购物引导
+        if any(kw in question for kw in ["怎么买", "如何下单", "怎么下单", "怎么购买", "如何购买"]):
+            return (
+                "购物其实很简单，跟着我一步步来：\n"
+                "1. 在「商品浏览」页找到心仪商品，或直接在搜索框输入关键词；\n"
+                "2. 点击商品卡片查看详情、价格和真实评价；\n"
+                "3. 选择数量后点击「加入购物车」或「立即购买」；\n"
+                "4. 进入购物车确认商品和收货地址，提交订单并完成支付即可。\n\n"
+                "如果您不确定买哪款，也可以告诉我预算和用途，我来帮您推荐！"
+            )
 
-        if any(kw in question for kw in ["你好", "在吗", "有人吗", "hello", "hi"]):
-            return "您好！我是智能导购助手，可以为您：\n• 推荐合适的商品\n• 查询商品价格和评价\n• 对比同类商品\n• 解答品牌相关问题\n\n请问有什么可以帮您？"
+        # 售后/平台规则
+        if any(kw in question for kw in ["运费", "发票", "退换货", "售后", "保修", "质保"]):
+            return (
+                "关于平台服务，您可以放心：\n"
+                "• 大部分商品支持 7 天无理由退换货；\n"
+                "• 质量问题可在 30 天内申请退换；\n"
+                "• 如需发票，可在下单时备注或联系商家客服；\n"
+                "• 具体售后政策以商品详情页说明为准。\n\n"
+                "如果您想咨询某款商品的售后细节，请把商品名称发给我，我帮您查询。"
+            )
+
+        # 问候语
+        if any(kw in q_lower for kw in ["你好", "在吗", "有人吗", "hello", "hi", "嗨", "您好"]):
+            return (
+                "您好呀！我是您的智能导购助手，专门帮您省心购物～\n"
+                "我可以做的事：\n"
+                "• 根据您的需求推荐合适的商品\n"
+                "• 查询商品价格、评价和卖点\n"
+                "• 对比几款相似商品，帮您做选择\n"
+                "• 解答品牌、功能、售后等问题\n\n"
+                "请直接告诉我您想买什么，比如「推荐一款 200 元以内的蓝牙耳机」，我马上帮您找！"
+            )
+
+        # 根据问题类型给出更针对性的引导
+        if q_type == "price":
+            return (
+                "我没找到完全匹配的商品来报价，您可以换个说法试试：\n"
+                "• 直接说商品名称，如「华为 FreeBuds 多少钱」\n"
+                "• 说预算和需求，如「300 元以内有什么好用的音箱」\n\n"
+                "我就能从商品库中调出真实价格帮您对比。"
+            )
+
+        if q_type == "recommend":
+            return (
+                "我很乐意帮您推荐！为了更精准，您可以这样描述：\n"
+                "• 用途 + 预算，例如「学生党，想买 500 元以内的平板」\n"
+                "• 品牌偏好 + 品类，例如「小米的电饭煲推荐哪款」\n\n"
+                "我会结合商品库里的真实数据和评价给您建议。"
+            )
+
+        if q_type == "review":
+            return (
+                "我暂时没检索到对应商品的真实评价，您可以：\n"
+                "• 发送准确的商品名称，如「iPhone 15 评价怎么样」\n"
+                "• 或者告诉我品类，如「口碑好的猫粮有哪些」\n\n"
+                "我会从已有评价中帮您总结优缺点。"
+            )
+
+        # 兜底：拉取几个热门分类做引导
+        try:
+            with SessionLocal() as db:
+                top_cats = list(db.execute(
+                    select(Product.category, func.count(Product.id).label("cnt"))
+                    .where(Product.category.isnot(None))
+                    .group_by(Product.category)
+                    .order_by(desc("cnt"))
+                    .limit(5)
+                ).all())
+                cat_hints = "、".join([c[0] for c in top_cats if c[0]]) or "数码电子、家居家电、化妆品、宠物用品"
+        except Exception:
+            cat_hints = "数码电子、家居家电、化妆品、宠物用品"
 
         return (
-            f"很抱歉，我暂时没有在商品库中找到与您问题直接相关的商品。\n"
-            f"您可以尝试：\n"
-            f"• 告诉我具体的商品名称（如「蓝牙耳机」）\n"
-            f"• 说出您的需求（如「推荐一款200元以内的保温杯」）\n"
-            f"• 询问某个品牌的信息（如「华为这个品牌怎么样」）\n\n"
-            f"我会从商品数据库中为您找到最匹配的商品并给出详细解答！"
+            "抱歉，我暂时没从商品库中找到与您的问题直接匹配的商品。\n\n"
+            "您可以尝试以下方式：\n"
+            "• 发送具体商品名称，例如「兰蔻小黑瓶精华」\n"
+            "• 描述需求和预算，例如「推荐一款性价比高的扫地机器人」\n"
+            "• 询问品牌信息，例如「索尼耳机怎么样」\n\n"
+            f"目前平台覆盖较全的品类有：{cat_hints}。\n"
+            "告诉我您想买什么，我马上帮您找！"
         )
 
     # ===== 辅助方法 =====
