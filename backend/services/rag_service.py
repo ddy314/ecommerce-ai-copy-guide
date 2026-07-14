@@ -20,6 +20,15 @@ from backend.models.review import Review
 
 logger = logging.getLogger(__name__)
 
+# 多路召回路径权重
+RECALL_PATH_WEIGHTS = {
+    "exact_name": 1.0,
+    "category_keyword": 0.85,
+    "general_keyword": 0.7,
+    "knowledge_base": 0.75,
+    "brand_knowledge": 0.6,
+}
+
 
 # ===== 分类关键词映射（用于精准分类检测，防止跨分类匹配）=====
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
@@ -146,14 +155,14 @@ class RAGService:
         product_id: int | None = None,
         user_id: int | None = None,
     ) -> dict:
-        """深度数据驱动的智能问答
+        """深度数据驱动的智能问答（多路召回 + Rerank）
 
         策略：
-        1. 若有 product_id，直接获取该商品完整数据
-        2. 若无 product_id，从问题中提取关键词搜索数据库匹配商品
-        3. 获取商品完整信息 + 真实评论 + 同类推荐
-        4. 根据问题类型构建数据驱动的精准回答
-        5. 品牌相关问题自动检索品牌知识库
+        1. 多路召回：精确商品名、分类关键词、通用关键词、知识库、品牌知识库
+        2. Rerank：按路径权重、匹配度、评分综合排序，选出最佳商品
+        3. 检索商品知识库，补充规格/售后/FAQ 等信息
+        4. 获取真实评论 + 同类推荐
+        5. 根据问题类型构建数据驱动的精准回答
         """
         q_type = self._detect_question_type(question)
 
@@ -161,13 +170,16 @@ class RAGService:
         product: Optional[Product] = None
         related_products: list[Product] = []
         reviews: list[Review] = []
+        knowledge_context = ""
 
         with SessionLocal() as db:
             if product_id:
                 product = db.get(Product, product_id)
             else:
-                # 从问题中搜索匹配商品
-                product = self._search_product_by_question(db, question)
+                # 多路召回 + Rerank 选出最佳商品
+                product = self._rerank_best_product(
+                    db, self._multi_path_recall_products(db, question)
+                )
 
             if product:
                 # 获取真实评论
@@ -186,10 +198,16 @@ class RAGService:
                     ).order_by(Product.rating.desc()).limit(5)
                 ).scalars().all())
 
+                # 检索商品知识库，获取相关上下文
+                knowledge_context = self._retrieve_knowledge_context(
+                    db, question, product
+                )
+
         # 构建回答
         if product:
             answer = self._build_data_driven_answer(
-                question, q_type, product, reviews, related_products
+                question, q_type, product, reviews, related_products,
+                knowledge_context=knowledge_context,
             )
             source = "data_rag"
         else:
@@ -382,6 +400,144 @@ class RAGService:
         all_results.sort(key=global_score, reverse=True)
         return all_results[0] if all_results else None
 
+    # ===== 多路召回与 Rerank =====
+
+    def _multi_path_recall_products(
+        self, db, question: str
+    ) -> list[tuple[Product, float, str]]:
+        """多路召回候选商品
+
+        返回 (product, raw_score, path_name) 列表，用于后续 Rerank。
+        """
+        candidates: list[tuple[Product, float, str]] = []
+        q_lower = question.lower()
+        detected_category = self._detect_category(question)
+        primary_kws = self._extract_primary_keywords(question)
+        keywords = self._extract_keywords(question)
+        search_kws = [kw for kw in keywords if 2 <= len(kw) <= 6] or keywords[:5]
+
+        # Path 1: 精确商品名匹配
+        exact = self._try_exact_product_match(db, question)
+        if exact:
+            candidates.append((exact, 10.0, "exact_name"))
+
+        # Path 2: 分类 + 核心关键词
+        if primary_kws:
+            conditions = [Product.name.ilike(f"%{kw}%") for kw in primary_kws]
+            stmt = select(Product)
+            if detected_category:
+                stmt = stmt.where(
+                    Product.category == detected_category,
+                    or_(*conditions),
+                )
+            else:
+                stmt = stmt.where(or_(*conditions))
+            results = list(db.execute(stmt.limit(50)).scalars().all())
+            for p in results:
+                name_lower = (p.name or "").lower()
+                score = sum(len(kw) * 5.0 for kw in primary_kws if kw.lower() in name_lower)
+                score += (p.rating or 0) * 0.1
+                candidates.append((p, score, "category_keyword"))
+
+        # Path 3: 通用关键词全局召回
+        if search_kws:
+            conditions = [Product.name.ilike(f"%{kw}%") for kw in search_kws[:10]]
+            results = list(db.execute(
+                select(Product).where(or_(*conditions)).limit(50)
+            ).scalars().all())
+            for p in results:
+                name_lower = (p.name or "").lower()
+                score = sum(len(kw) * 2.0 for kw in search_kws if kw.lower() in name_lower)
+                if detected_category and p.category == detected_category:
+                    score += 5.0
+                score += (p.rating or 0) * 0.1
+                candidates.append((p, score, "general_keyword"))
+
+        # Path 4: 品牌知识库触发商品召回
+        matched_brands = [
+            brand for brand in BRAND_KNOWLEDGE
+            if brand.lower() in q_lower
+        ]
+        if matched_brands:
+            brand_conditions = [
+                Product.name.ilike(f"%{brand}%") for brand in matched_brands
+            ]
+            results = list(db.execute(
+                select(Product).where(or_(*brand_conditions)).limit(30)
+            ).scalars().all())
+            for p in results:
+                score = 3.0 + (p.rating or 0) * 0.1
+                candidates.append((p, score, "brand_knowledge"))
+
+        return candidates
+
+    def _rerank_best_product(
+        self, db, candidates: list[tuple[Product, float, str]]
+    ) -> Optional[Product]:
+        """对多路召回结果进行融合排序，返回最佳商品"""
+        if not candidates:
+            return None
+
+        # 按商品 ID 聚合多路得分
+        product_scores: dict[int, tuple[Product, float]] = {}
+        for product, raw_score, path in candidates:
+            weight = RECALL_PATH_WEIGHTS.get(path, 0.5)
+            fused_score = raw_score * weight
+            if product.id in product_scores:
+                # 取最高得分的召回路径，并叠加少量分数体现多路径命中
+                existing = product_scores[product.id][1]
+                product_scores[product.id] = (
+                    product,
+                    max(existing, fused_score) + 0.3,
+                )
+            else:
+                product_scores[product.id] = (product, fused_score)
+
+        # 排序并返回最佳商品
+        ranked = sorted(
+            product_scores.values(), key=lambda x: x[1], reverse=True
+        )
+        best = ranked[0]
+        logger.info(
+            f"Rerank 最佳商品: {best[0].name[:40]}, 融合得分={best[1]:.2f}, "
+            f"候选数={len(ranked)}"
+        )
+        return best[0]
+
+    def _retrieve_knowledge_context(
+        self, db, question: str, product: Product
+    ) -> str:
+        """检索商品知识库并返回相关文本上下文"""
+        entries = list(db.execute(
+            select(KnowledgeEntry)
+            .where(
+                KnowledgeEntry.is_active == True,
+                or_(
+                    KnowledgeEntry.product_id == product.id,
+                    KnowledgeEntry.product_id.is_(None),
+                ),
+            )
+        ).scalars().all())
+        if not entries:
+            return ""
+
+        question_kws = self._extract_keywords(question)
+        scored = []
+        for entry in entries:
+            score = self._calculate_similarity(question, question_kws, entry)
+            if score > 0:
+                scored.append((score, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_entries = [entry for _, entry in scored[:3]]
+        if not top_entries:
+            return ""
+
+        parts = []
+        for entry in top_entries:
+            parts.append(f"【{entry.category}】{entry.title}: {entry.content}")
+        return "\n".join(parts)
+
     def _try_exact_product_match(self, db, question: str) -> Optional[Product]:
         """尝试从问题中提取商品名并精确匹配数据库中的商品
 
@@ -524,27 +680,30 @@ class RAGService:
         product: Product,
         reviews: list[Review],
         related: list[Product],
+        knowledge_context: str = "",
     ) -> str:
         """基于真实商品数据构建回答"""
 
         if q_type == "price":
             return self._answer_price(product, related, question)
         elif q_type == "recommend":
-            return self._answer_recommend(product, related, question)
+            return self._answer_recommend(product, related, question, knowledge_context)
         elif q_type == "brand":
             return self._answer_brand(product, question)
         elif q_type == "function":
-            return self._answer_function(product, reviews, question)
+            return self._answer_function(product, reviews, question, knowledge_context)
         elif q_type == "size":
-            return self._answer_size(product, question)
+            return self._answer_size(product, question, knowledge_context)
         elif q_type == "review":
             return self._answer_review(product, reviews, question)
         elif q_type == "after_sale":
-            return self._answer_after_sale(product, question)
+            return self._answer_after_sale(product, question, knowledge_context)
         elif q_type == "compare":
             return self._answer_compare(product, related, question)
         else:
-            return self._answer_general(product, reviews, related, question)
+            return self._answer_general(
+                product, reviews, related, question, knowledge_context
+            )
 
     # ===== 各类型问题的回答构建 =====
 
@@ -591,7 +750,9 @@ class RAGService:
 
         return "\n".join(parts)
 
-    def _answer_recommend(self, product: Product, related: list[Product], question: str) -> str:
+    def _answer_recommend(
+        self, product: Product, related: list[Product], question: str, knowledge_context: str = ""
+    ) -> str:
         """推荐/导购问题 - 用真实商品数据推荐"""
         parts = [f"根据您的需求，为您推荐「{product.name}」："]
         parts.append(f"• 价格：¥{product.price or 0:.0f}")
@@ -601,6 +762,9 @@ class RAGService:
         if product.selling_points:
             parts.append(f"• 亮点：{product.selling_points[:100]}")
         parts.append(f"• 分类：{product.category or '综合'}")
+
+        if knowledge_context:
+            parts.append(f"\n商品知识：\n{knowledge_context}")
 
         if related:
             parts.append(f"\n同分类其他优质选择：")
@@ -665,9 +829,14 @@ class RAGService:
 
         return "\n".join(parts)
 
-    def _answer_function(self, product: Product, reviews: list[Review], question: str) -> str:
-        """功能/使用问题 - 用卖点+评论回答"""
+    def _answer_function(
+        self, product: Product, reviews: list[Review], question: str, knowledge_context: str = ""
+    ) -> str:
+        """功能/使用问题 - 用卖点+评论+知识库回答"""
         parts = [f"关于「{product.name}」的功能："]
+
+        if knowledge_context:
+            parts.append(f"\n商品知识参考：\n{knowledge_context}")
 
         if product.selling_points:
             parts.append(f"\n核心卖点：{product.selling_points}")
@@ -688,9 +857,14 @@ class RAGService:
 
         return "\n".join(parts)
 
-    def _answer_size(self, product: Product, question: str) -> str:
+    def _answer_size(
+        self, product: Product, question: str, knowledge_context: str = ""
+    ) -> str:
         """尺寸/规格问题"""
         parts = [f"关于「{product.name}」的规格信息："]
+
+        if knowledge_context:
+            parts.append(f"商品知识参考：\n{knowledge_context}")
 
         if product.specs:
             parts.append(f"规格参数：{product.specs}")
@@ -738,17 +912,23 @@ class RAGService:
 
         return "\n".join(parts)
 
-    def _answer_after_sale(self, product: Product, question: str) -> str:
+    def _answer_after_sale(
+        self, product: Product, question: str, knowledge_context: str = ""
+    ) -> str:
         """售后问题"""
-        return (
-            f"「{product.name}」售后政策：\n"
-            f"• 支持 7 天无理由退换货\n"
-            f"• 质量问题 30 天内包退换\n"
-            f"• 提供一年质保服务\n"
-            f"• 全国联保，支持就近售后\n\n"
+        parts = [f"「{product.name}」售后政策："]
+        if knowledge_context:
+            parts.append(f"商品知识参考：\n{knowledge_context}")
+        parts.extend([
+            "• 支持 7 天无理由退换货",
+            "• 质量问题 30 天内包退换",
+            "• 提供一年质保服务",
+            "• 全国联保，支持就近售后",
+            "",
             f"该商品定价 ¥{product.price or 0:.0f}，属于{product.category or '综合'}分类。"
-            f"如有售后问题，请联系客服或提交售后申请。"
-        )
+            f"如有售后问题，请联系客服或提交售后申请。",
+        ])
+        return "\n".join(parts)
 
     def _answer_compare(self, product: Product, related: list[Product], question: str) -> str:
         """比较问题 - 用同类商品数据对比"""
@@ -779,7 +959,10 @@ class RAGService:
 
         return "\n".join(parts)
 
-    def _answer_general(self, product: Product, reviews: list[Review], related: list[Product], question: str) -> str:
+    def _answer_general(
+        self, product: Product, reviews: list[Review], related: list[Product],
+        question: str, knowledge_context: str = ""
+    ) -> str:
         """通用问题 - 综合所有数据回答"""
         parts = [f"关于「{product.name}」："]
         parts.append(f"• 分类：{product.category or '综合'}")
@@ -789,6 +972,9 @@ class RAGService:
 
         if product.selling_points:
             parts.append(f"• 亮点：{product.selling_points[:100]}")
+
+        if knowledge_context:
+            parts.append(f"\n商品知识参考：\n{knowledge_context}")
 
         if reviews:
             # 展示1条代表性评论
@@ -946,7 +1132,34 @@ class RAGService:
             db.refresh(entry)
             return entry.to_dict()
 
-    def list_knowledge(self, product_id: int | None = None, category: str | None = None) -> list[dict]:
+    def update_knowledge(
+        self, entry_id: int, product_id: int | None = None, category: str | None = None,
+        title: str | None = None, content: str | None = None, keywords: list[str] | None = None,
+    ) -> dict | None:
+        with SessionLocal() as db:
+            entry = db.get(KnowledgeEntry, entry_id)
+            if not entry:
+                return None
+            if product_id is not None:
+                entry.product_id = product_id
+            if category is not None:
+                entry.category = category
+            if title is not None:
+                entry.title = title
+            if content is not None:
+                entry.content = content
+            if keywords is not None:
+                entry.keywords = json.dumps(keywords, ensure_ascii=False)
+            db.commit()
+            db.refresh(entry)
+            return entry.to_dict()
+
+    def list_knowledge(
+        self,
+        product_id: int | None = None,
+        category: str | None = None,
+        keyword: str | None = None,
+    ) -> list[dict]:
         with SessionLocal() as db:
             stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active == True)
             if product_id:
@@ -955,7 +1168,23 @@ class RAGService:
                 stmt = stmt.where(KnowledgeEntry.category == category)
             stmt = stmt.order_by(KnowledgeEntry.created_at.desc())
             entries = list(db.execute(stmt).scalars().all())
-            return [e.to_dict() for e in entries]
+            result = [e.to_dict() for e in entries]
+            if keyword and keyword.strip():
+                kw = keyword.strip().lower()
+                result = [
+                    r for r in result
+                    if kw in (r.get("title") or "").lower()
+                    or kw in (r.get("content") or "").lower()
+                    or any(kw in (k or "").lower() for k in (r.get("keywords") or []))
+                ]
+            return result
+
+    def list_knowledge_categories(self) -> list[str]:
+        """返回知识库中所有不重复的知识类型"""
+        with SessionLocal() as db:
+            stmt = select(KnowledgeEntry.category).distinct().where(KnowledgeEntry.is_active == True)
+            rows = list(db.execute(stmt).scalars().all())
+            return [r for r in rows if r]
 
     def delete_knowledge(self, entry_id: int) -> bool:
         with SessionLocal() as db:
