@@ -110,6 +110,7 @@ def init_db() -> None:
     _add_product_published_column()
     _add_order_extra_columns()
     _add_display_id_columns()
+    _add_review_user_id_column()
     # 2. 数据迁移：将残留明文密码哈希化并清空明文
     _hash_existing_plain_passwords()
     # 3. 规范化已有订单编号
@@ -280,6 +281,25 @@ def _add_product_published_column() -> None:
                 logger.info(f"已回填 {updated} 个商品的 is_published 为 True")
     except Exception as e:
         logger.warning(f"添加/回填 is_published 字段失败: {e}")
+
+
+def _add_review_user_id_column() -> None:
+    """为已有 reviews 表添加 user_id 字段（如果不存在）"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        if "reviews" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("reviews")]
+        if "user_id" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE reviews ADD COLUMN user_id INTEGER"))
+                conn.commit()
+            logger.info("已为 reviews 表添加 user_id 字段")
+    except Exception as e:
+        logger.warning(f"添加 reviews.user_id 字段失败: {e}")
 
 
 def _hash_existing_plain_passwords() -> None:

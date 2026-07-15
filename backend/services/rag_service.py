@@ -149,21 +149,113 @@ class RAGService:
 
     # ===== 核心：智能问答 =====
 
+    def _load_user_history(
+        self, user_id: int | None, limit: int = 5
+    ) -> list[dict]:
+        """加载用户最近几轮问答历史，用于长对话上下文理解"""
+        if not user_id:
+            return []
+        try:
+            with SessionLocal() as db:
+                records = list(
+                    db.execute(
+                        select(QARecord)
+                        .where(QARecord.user_id == user_id)
+                        .order_by(QARecord.created_at.desc())
+                        .limit(limit)
+                    )
+                    .scalars()
+                    .all()
+                )
+                records.reverse()
+                return [r.to_dict() for r in records]
+        except Exception as e:
+            logger.warning(f"加载用户问答历史失败: {e}")
+            return []
+
+    def _is_follow_up_question(self, question: str) -> bool:
+        """判断当前问题是否是对前文商品的指代/追问"""
+        q = question.lower()
+        follow_up_signals = [
+            "这个", "那个", "它", "这款", "那款", "这款商品", "那个商品",
+            "怎么样", "好不好", "哪个", "哪个好", "推荐哪个", "呢", "吗",
+            "还有吗", "还有别的", "别的", "其他的", "再", "更",
+        ]
+        # 问题很短（<=6 个中文字符）大概率是追问
+        if len(question.strip()) <= 6:
+            return True
+        return any(sig in q for sig in follow_up_signals)
+
+    def _enrich_question_with_history(
+        self, question: str, history: list[dict]
+    ) -> tuple[str, int | None, str | None]:
+        """结合历史问答补全当前问题，返回（补全后问题，继承商品ID，继承分类）"""
+        if not history:
+            return question, None, None
+
+        last_record = history[-1]
+        last_product_id = last_record.get("product_id")
+        last_question = last_record.get("question", "")
+        last_answer = last_record.get("answer", "")
+
+        # 从上一个回答中提取分类
+        inherited_category = None
+        cat_match = re.search(r"[•\-]\s*分类：([^\n]+)", last_answer)
+        if cat_match:
+            inherited_category = cat_match.group(1).strip()
+
+        # 只有追问才补全
+        if not self._is_follow_up_question(question):
+            return question, None, inherited_category
+
+        # 将指代词替换为上一个问题中的商品/品类信息
+        expanded = question
+        # 尝试从上一个问题提取商品名
+        product_name = None
+        if "「" in last_answer and "」" in last_answer:
+            name_match = re.search(r"「([^」]+)」", last_answer)
+            if name_match:
+                product_name = name_match.group(1)
+
+        # 组合成完整问句
+        if product_name:
+            if any(kw in expanded for kw in ["这个", "那个", "它", "这款", "那款"]):
+                expanded = expanded.replace("这个", f"「{product_name}」")
+                expanded = expanded.replace("那个", f"「{product_name}」")
+                expanded = expanded.replace("它", f"「{product_name}」")
+                expanded = expanded.replace("这款", f"「{product_name}」")
+                expanded = expanded.replace("那款", f"「{product_name}」")
+            else:
+                expanded = f"关于{product_name}，{expanded}"
+        elif last_question:
+            expanded = f"结合之前的问题「{last_question}」，{question}"
+
+        return expanded, last_product_id, inherited_category
+
     def answer_question(
         self,
         question: str,
         product_id: int | None = None,
         user_id: int | None = None,
     ) -> dict:
-        """深度数据驱动的智能问答（多路召回 + Rerank）
+        """深度数据驱动的智能问答（多路召回 + Rerank + 长对话上下文）
 
         策略：
-        1. 多路召回：精确商品名、分类关键词、通用关键词、知识库、品牌知识库
-        2. Rerank：按路径权重、匹配度、评分综合排序，选出最佳商品
-        3. 检索商品知识库，补充规格/售后/FAQ 等信息
-        4. 获取真实评论 + 同类推荐
-        5. 根据问题类型构建数据驱动的精准回答
+        1. 加载用户历史问答，补全追问/指代问题
+        2. 多路召回：精确商品名、分类关键词、通用关键词、知识库、品牌知识库
+        3. Rerank：按路径权重、匹配度、评分综合排序，选出最佳商品
+        4. 检索商品知识库，补充规格/售后/FAQ 等信息
+        5. 获取真实评论 + 同类推荐
+        6. 根据问题类型结合对话历史构建精准回答
         """
+        # 加载历史并补全当前问题
+        history = self._load_user_history(user_id, limit=5)
+        enriched_question, inherited_product_id, inherited_category = (
+            self._enrich_question_with_history(question, history)
+        )
+        # 如果前端指定了 product_id，优先使用；否则尝试继承历史商品
+        effective_product_id = product_id or inherited_product_id
+
         q_type = self._detect_question_type(question)
 
         # 获取商品数据
@@ -173,49 +265,68 @@ class RAGService:
         knowledge_context = ""
 
         with SessionLocal() as db:
-            if product_id:
-                product = db.get(Product, product_id)
+            if effective_product_id:
+                product = db.get(Product, effective_product_id)
             else:
                 # 多路召回 + Rerank 选出最佳商品
-                product = self._rerank_best_product(
-                    db, self._multi_path_recall_products(db, question)
-                )
+                candidates = self._multi_path_recall_products(db, enriched_question)
+                # 如果有继承分类，优先在分类内排序
+                if inherited_category:
+                    for i, (p, score, path) in enumerate(candidates):
+                        if p.category == inherited_category:
+                            candidates[i] = (p, score + 3.0, path)
+                product = self._rerank_best_product(db, candidates)
 
             if product:
                 # 获取真实评论
-                reviews = list(db.execute(
-                    select(Review)
-                    .where(Review.product_id == product.id)
-                    .order_by(Review.created_at.desc())
-                    .limit(10)
-                ).scalars().all())
+                reviews = list(
+                    db.execute(
+                        select(Review)
+                        .where(Review.product_id == product.id)
+                        .order_by(Review.created_at.desc())
+                        .limit(10)
+                    )
+                    .scalars()
+                    .all()
+                )
 
                 # 获取同类推荐商品
-                related_products = list(db.execute(
-                    select(Product).where(
-                        Product.category == product.category,
-                        Product.id != product.id,
-                    ).order_by(Product.rating.desc()).limit(5)
-                ).scalars().all())
+                related_products = list(
+                    db.execute(
+                        select(Product)
+                        .where(
+                            Product.category == product.category,
+                            Product.id != product.id,
+                        )
+                        .order_by(Product.rating.desc())
+                        .limit(5)
+                    )
+                    .scalars()
+                    .all()
+                )
 
                 # 检索商品知识库，获取相关上下文
                 knowledge_context = self._retrieve_knowledge_context(
-                    db, question, product
+                    db, enriched_question, product
                 )
 
         # 构建回答
         if product:
             answer = self._build_data_driven_answer(
-                question, q_type, product, reviews, related_products,
+                enriched_question,
+                q_type,
+                product,
+                reviews,
+                related_products,
                 knowledge_context=knowledge_context,
             )
             source = "data_rag"
         else:
             # 数据库没有匹配商品，尝试通用回答
-            answer = self._build_no_match_answer(question, q_type)
+            answer = self._build_no_match_answer(enriched_question, q_type)
             source = "fallback"
 
-        # 记录问答
+        # 记录问答（使用原始问题，而非补全后的问题）
         try:
             with SessionLocal() as db:
                 record = QARecord(
@@ -707,7 +818,9 @@ class RAGService:
 
     # ===== 各类型问题的回答构建 =====
 
-    def _answer_price(self, product: Product, related: list[Product], question: str) -> str:
+    def _answer_price(
+        self, product: Product, related: list[Product], question: str
+    ) -> str:
         """价格/性价比问题 - 用真实价格数据回答"""
         price = product.price or 0
         rating = product.rating or 5.0
@@ -751,7 +864,11 @@ class RAGService:
         return "\n".join(parts)
 
     def _answer_recommend(
-        self, product: Product, related: list[Product], question: str, knowledge_context: str = ""
+        self,
+        product: Product,
+        related: list[Product],
+        question: str,
+        knowledge_context: str = "",
     ) -> str:
         """推荐/导购问题 - 用真实商品数据推荐，语气更自然"""
         brand = self._get_real_brand(product)
@@ -813,7 +930,9 @@ class RAGService:
                     return brand_key
         return brand or "通用"
 
-    def _answer_brand(self, product: Product, question: str) -> str:
+    def _answer_brand(
+        self, product: Product, question: str
+    ) -> str:
         """品牌相关问题 - 从品牌知识库检索"""
         brand = self._get_real_brand(product)
 
@@ -846,7 +965,11 @@ class RAGService:
         return "\n".join(parts)
 
     def _answer_function(
-        self, product: Product, reviews: list[Review], question: str, knowledge_context: str = ""
+        self,
+        product: Product,
+        reviews: list[Review],
+        question: str,
+        knowledge_context: str = "",
     ) -> str:
         """功能/使用问题 - 用卖点+评论+知识库回答"""
         parts = [f"关于「{product.name}」的功能："]
@@ -874,7 +997,10 @@ class RAGService:
         return "\n".join(parts)
 
     def _answer_size(
-        self, product: Product, question: str, knowledge_context: str = ""
+        self,
+        product: Product,
+        question: str,
+        knowledge_context: str = "",
     ) -> str:
         """尺寸/规格问题"""
         parts = [f"关于「{product.name}」的规格信息："]
@@ -894,7 +1020,9 @@ class RAGService:
 
         return "\n".join(parts)
 
-    def _answer_review(self, product: Product, reviews: list[Review], question: str) -> str:
+    def _answer_review(
+        self, product: Product, reviews: list[Review], question: str
+    ) -> str:
         """评价/口碑问题 - 用真实评论回答"""
         parts = [f"「{product.name}」的用户评价总结："]
 
@@ -929,7 +1057,10 @@ class RAGService:
         return "\n".join(parts)
 
     def _answer_after_sale(
-        self, product: Product, question: str, knowledge_context: str = ""
+        self,
+        product: Product,
+        question: str,
+        knowledge_context: str = "",
     ) -> str:
         """售后问题：结合知识库，避免千篇一律"""
         parts = [f"关于「{product.name}」的售后政策："]
@@ -982,7 +1113,9 @@ class RAGService:
         )
         return "\n".join(parts)
 
-    def _answer_compare(self, product: Product, related: list[Product], question: str) -> str:
+    def _answer_compare(
+        self, product: Product, related: list[Product], question: str
+    ) -> str:
         """比较问题 - 用同类商品数据对比"""
         parts = [f"为您对比「{product.name}」与同类商品："]
         parts.append(f"\n当前商品：")
@@ -1012,8 +1145,12 @@ class RAGService:
         return "\n".join(parts)
 
     def _answer_general(
-        self, product: Product, reviews: list[Review], related: list[Product],
-        question: str, knowledge_context: str = ""
+        self,
+        product: Product,
+        reviews: list[Review],
+        related: list[Product],
+        question: str,
+        knowledge_context: str = "",
     ) -> str:
         """通用问题 - 综合所有数据，回答更自然"""
         brand = self._get_real_brand(product)
@@ -1050,25 +1187,28 @@ class RAGService:
             parts.append(f"\n这款商品评分一般，建议您多看看评价细节后再做决定。")
 
         parts.append(f"\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
-
         return "\n".join(parts)
 
-    def _build_no_match_answer(self, question: str, q_type: str) -> str:
+    def _build_no_match_answer(
+        self, question: str, q_type: str
+    ) -> str:
         """数据库未匹配到商品时的回答：更温暖、更具引导性"""
         q_lower = question.lower()
+        result = ""
 
         # 品牌问题：结合品牌知识库给出介绍，并推荐相关商品
         for brand_key, info in BRAND_KNOWLEDGE.items():
             if brand_key.lower() in q_lower:
-                return (
+                result = (
                     f"关于 {brand_key}：{info}\n\n"
                     f"我们平台上也有不少 {brand_key} 的商品，"
                     f"您可以直接告诉我具体想了解的型号或品类（比如「{brand_key} 耳机」），我帮您挑几款合适的～"
                 )
+                break
 
         # 通用购物引导
-        if any(kw in question for kw in ["怎么买", "如何下单", "怎么下单", "怎么购买", "如何购买"]):
-            return (
+        if not result and any(kw in question for kw in ["怎么买", "如何下单", "怎么下单", "怎么购买", "如何购买"]):
+            result = (
                 "购物其实很简单，跟着我一步步来：\n"
                 "1. 在「商品浏览」页找到心仪商品，或直接在搜索框输入关键词；\n"
                 "2. 点击商品卡片查看详情、价格和真实评价；\n"
@@ -1078,8 +1218,8 @@ class RAGService:
             )
 
         # 售后/平台规则
-        if any(kw in question for kw in ["运费", "发票", "退换货", "售后", "保修", "质保"]):
-            return (
+        if not result and any(kw in question for kw in ["运费", "发票", "退换货", "售后", "保修", "质保"]):
+            result = (
                 "关于平台服务，您可以放心：\n"
                 "• 大部分商品支持 7 天无理由退换货；\n"
                 "• 质量问题可在 30 天内申请退换；\n"
@@ -1089,8 +1229,8 @@ class RAGService:
             )
 
         # 问候语
-        if any(kw in q_lower for kw in ["你好", "在吗", "有人吗", "hello", "hi", "嗨", "您好"]):
-            return (
+        if not result and any(kw in q_lower for kw in ["你好", "在吗", "有人吗", "hello", "hi", "嗨", "您好"]):
+            result = (
                 "您好呀！我是您的智能导购助手，专门帮您省心购物～\n"
                 "我可以做的事：\n"
                 "• 根据您的需求推荐合适的商品\n"
@@ -1101,24 +1241,24 @@ class RAGService:
             )
 
         # 根据问题类型给出更针对性的引导
-        if q_type == "price":
-            return (
+        if not result and q_type == "price":
+            result = (
                 "我没找到完全匹配的商品来报价，您可以换个说法试试：\n"
                 "• 直接说商品名称，如「华为 FreeBuds 多少钱」\n"
                 "• 说预算和需求，如「300 元以内有什么好用的音箱」\n\n"
                 "我就能从商品库中调出真实价格帮您对比。"
             )
 
-        if q_type == "recommend":
-            return (
+        if not result and q_type == "recommend":
+            result = (
                 "我很乐意帮您推荐！为了更精准，您可以这样描述：\n"
                 "• 用途 + 预算，例如「学生党，想买 500 元以内的平板」\n"
                 "• 品牌偏好 + 品类，例如「小米的电饭煲推荐哪款」\n\n"
                 "我会结合商品库里的真实数据和评价给您建议。"
             )
 
-        if q_type == "review":
-            return (
+        if not result and q_type == "review":
+            result = (
                 "我暂时没检索到对应商品的真实评价，您可以：\n"
                 "• 发送准确的商品名称，如「iPhone 15 评价怎么样」\n"
                 "• 或者告诉我品类，如「口碑好的猫粮有哪些」\n\n"
@@ -1126,28 +1266,31 @@ class RAGService:
             )
 
         # 兜底：拉取几个热门分类做引导
-        try:
-            with SessionLocal() as db:
-                top_cats = list(db.execute(
-                    select(Product.category, func.count(Product.id).label("cnt"))
-                    .where(Product.category.isnot(None))
-                    .group_by(Product.category)
-                    .order_by(desc("cnt"))
-                    .limit(5)
-                ).all())
-                cat_hints = "、".join([c[0] for c in top_cats if c[0]]) or "数码电子、家居家电、化妆品、宠物用品"
-        except Exception:
-            cat_hints = "数码电子、家居家电、化妆品、宠物用品"
+        if not result:
+            try:
+                with SessionLocal() as db:
+                    top_cats = list(db.execute(
+                        select(Product.category, func.count(Product.id).label("cnt"))
+                        .where(Product.category.isnot(None))
+                        .group_by(Product.category)
+                        .order_by(desc("cnt"))
+                        .limit(5)
+                    ).all())
+                    cat_hints = "、".join([c[0] for c in top_cats if c[0]]) or "数码电子、家居家电、化妆品、宠物用品"
+            except Exception:
+                cat_hints = "数码电子、家居家电、化妆品、宠物用品"
 
-        return (
-            "抱歉，我暂时没从商品库中找到与您的问题直接匹配的商品。\n\n"
-            "您可以尝试以下方式：\n"
-            "• 发送具体商品名称，例如「兰蔻小黑瓶精华」\n"
-            "• 描述需求和预算，例如「推荐一款性价比高的扫地机器人」\n"
-            "• 询问品牌信息，例如「索尼耳机怎么样」\n\n"
-            f"目前平台覆盖较全的品类有：{cat_hints}。\n"
-            "告诉我您想买什么，我马上帮您找！"
-        )
+            result = (
+                "抱歉，我暂时没从商品库中找到与您的问题直接匹配的商品。\n\n"
+                "您可以尝试以下方式：\n"
+                "• 发送具体商品名称，例如「兰蔻小黑瓶精华」\n"
+                "• 描述需求和预算，例如「推荐一款性价比高的扫地机器人」\n"
+                "• 询问品牌信息，例如「索尼耳机怎么样」\n\n"
+                f"目前平台覆盖较全的品类有：{cat_hints}。\n"
+                "告诉我您想买什么，我马上帮您找！"
+            )
+
+        return result
 
     # ===== 辅助方法 =====
 
