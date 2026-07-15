@@ -5,8 +5,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.cache/
-.hypothesis/
 .coverage
 htmlcov/
 
@@ -37,26 +35,11 @@ build/
 # Logs and data
 *.log
 *.db
-*.db-shm
-*.db-wal
-*.sqlite
-*.sqlite3
-*.sql
-*.dump
 data/raw/
 data/processed/
-data/backups/
-instance/
-backend/uploads/*
-!backend/uploads/.gitkeep
-.docs/
 
 # Docker
 *.pid
 
-# Local/generated delivery material and editor export caches
-docs/submission/
-.trae-html-share-packages/
-
-# Ignore all docs content
-docs/
+# User uploads
+backend/uploads/

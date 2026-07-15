@@ -1,5 +1,4 @@
 """客服消息路由 - 用户与商家对话"""
-
 from __future__ import annotations
 
 import logging
@@ -21,14 +20,19 @@ rag_service = RAGService()
 
 
 def _message_to_dict(
-    msg: CustomerServiceMessage, user_map: dict | None = None, product_map: dict | None = None
+    msg: CustomerServiceMessage,
+    user_map: dict | None = None,
+    merchant_map: dict | None = None,
+    product_map: dict | None = None,
 ) -> dict:
     user = (user_map or {}).get(msg.user_id)
+    merchant = (merchant_map or {}).get(msg.sender_id) if msg.sender_id else None
     product = (product_map or {}).get(msg.product_id) if msg.product_id else None
     return {
         "id": msg.id,
         "user_id": msg.user_id,
         "product_id": msg.product_id,
+        "sender_id": msg.sender_id,
         "sender_role": msg.sender_role,
         "content": msg.content,
         "is_read": msg.is_read,
@@ -36,6 +40,8 @@ def _message_to_dict(
         "user_nickname": user.nickname if user else "",
         "user_display_id": user.display_id if user else "",
         "user_avatar_url": user.avatar if user else "",
+        "merchant_nickname": merchant.nickname if merchant else "",
+        "merchant_avatar_url": merchant.avatar if merchant else "",
         "product_name": product.name if product else "",
         "product_display_id": product.display_id if product else "",
     }
@@ -101,9 +107,7 @@ def create_message():
                 if product:
                     product_map[msg.product_id] = product
 
-            return jsonify(
-                {"message": "发送成功", "data": _message_to_dict(msg, {user.id: user}, product_map)}
-            ), 201
+            return jsonify({"message": "发送成功", "data": _message_to_dict(msg, {user.id: user}, {}, product_map)}), 201
     except Exception as e:
         logger.error(f"发送客服消息失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
@@ -118,32 +122,34 @@ def my_messages():
 
     try:
         with SessionLocal() as db:
-            messages = list(
-                db.execute(
-                    select(CustomerServiceMessage)
-                    .where(CustomerServiceMessage.user_id == user_payload["user_id"])
-                    .order_by(CustomerServiceMessage.created_at)
-                )
-                .scalars()
-                .all()
-            )
+            messages = list(db.execute(
+                select(CustomerServiceMessage)
+                .where(CustomerServiceMessage.user_id == user_payload["user_id"])
+                .order_by(CustomerServiceMessage.created_at)
+            ).scalars().all())
 
             user = db.get(User, user_payload["user_id"])
             user_map = {user.id: user} if user else {}
 
+            merchant_ids = {m.sender_id for m in messages if m.sender_id}
+            merchant_map = {}
+            if merchant_ids:
+                merchants = list(db.execute(
+                    select(User).where(User.id.in_(merchant_ids))
+                ).scalars().all())
+                merchant_map = {m.id: m for m in merchants}
+
             product_ids = {m.product_id for m in messages if m.product_id}
             product_map = {}
             if product_ids:
-                products = list(
-                    db.execute(select(Product).where(Product.id.in_(product_ids))).scalars().all()
-                )
+                products = list(db.execute(
+                    select(Product).where(Product.id.in_(product_ids))
+                ).scalars().all())
                 product_map = {p.id: p for p in products}
 
-            return jsonify(
-                {
-                    "messages": [_message_to_dict(m, user_map, product_map) for m in messages],
-                }
-            )
+            return jsonify({
+                "messages": [_message_to_dict(m, user_map, merchant_map, product_map) for m in messages],
+            })
     except Exception as e:
         logger.error(f"获取客服消息失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
@@ -166,19 +172,15 @@ def merchant_threads():
                 .group_by(CustomerServiceMessage.user_id)
                 .subquery()
             )
-            latest = list(
-                db.execute(
-                    select(CustomerServiceMessage)
-                    .join(
-                        subquery,
-                        (CustomerServiceMessage.user_id == subquery.c.user_id)
-                        & (CustomerServiceMessage.created_at == subquery.c.last_time),
-                    )
-                    .order_by(desc(CustomerServiceMessage.created_at))
+            latest = list(db.execute(
+                select(CustomerServiceMessage)
+                .join(
+                    subquery,
+                    (CustomerServiceMessage.user_id == subquery.c.user_id)
+                    & (CustomerServiceMessage.created_at == subquery.c.last_time),
                 )
-                .scalars()
-                .all()
-            )
+                .order_by(desc(CustomerServiceMessage.created_at))
+            ).scalars().all())
 
             user_ids = {m.user_id for m in latest}
             users = {}
@@ -193,28 +195,24 @@ def merchant_threads():
                 user = users.get(msg.user_id)
                 if not user:
                     continue
-                unread_count = (
-                    db.execute(
-                        select(func.count(CustomerServiceMessage.id)).where(
-                            CustomerServiceMessage.user_id == msg.user_id,
-                            CustomerServiceMessage.sender_role == "user",
-                            not CustomerServiceMessage.is_read,
-                        )
-                    ).scalar()
-                    or 0
-                )
-                result.append(
-                    {
-                        "user_id": msg.user_id,
-                        "user_nickname": user.nickname or user.username,
-                        "user_display_id": user.display_id or "",
-                        "user_avatar_url": user.avatar or "",
-                        "last_message": msg.content,
-                        "last_time": msg.created_at.isoformat() if msg.created_at else None,
-                        "unread_count": unread_count,
-                        "product_id": msg.product_id,
-                    }
-                )
+                unread_count = db.execute(
+                    select(func.count(CustomerServiceMessage.id))
+                    .where(
+                        CustomerServiceMessage.user_id == msg.user_id,
+                        CustomerServiceMessage.sender_role == "user",
+                        CustomerServiceMessage.is_read == False,
+                    )
+                ).scalar() or 0
+                result.append({
+                    "user_id": msg.user_id,
+                    "user_nickname": user.nickname or user.username,
+                    "user_display_id": user.display_id or "",
+                    "user_avatar_url": user.avatar or "",
+                    "last_message": msg.content,
+                    "last_time": msg.created_at.isoformat() if msg.created_at else None,
+                    "unread_count": unread_count,
+                    "product_id": msg.product_id,
+                })
 
             return jsonify({"threads": result})
     except Exception as e:
@@ -231,41 +229,44 @@ def merchant_thread_detail(user_id: int):
 
     try:
         with SessionLocal() as db:
-            messages = list(
-                db.execute(
-                    select(CustomerServiceMessage)
-                    .where(CustomerServiceMessage.user_id == user_id)
-                    .order_by(CustomerServiceMessage.created_at)
-                )
-                .scalars()
-                .all()
-            )
+            messages = list(db.execute(
+                select(CustomerServiceMessage)
+                .where(CustomerServiceMessage.user_id == user_id)
+                .order_by(CustomerServiceMessage.created_at)
+            ).scalars().all())
 
             user = db.get(User, user_id)
             user_map = {user_id: user} if user else {}
 
+            merchant_ids = {m.sender_id for m in messages if m.sender_id}
+            merchant_map = {}
+            if merchant_ids:
+                merchants = list(db.execute(
+                    select(User).where(User.id.in_(merchant_ids))
+                ).scalars().all())
+                merchant_map = {m.id: m for m in merchants}
+
             product_ids = {m.product_id for m in messages if m.product_id}
             product_map = {}
             if product_ids:
-                products = list(
-                    db.execute(select(Product).where(Product.id.in_(product_ids))).scalars().all()
-                )
+                products = list(db.execute(
+                    select(Product).where(Product.id.in_(product_ids))
+                ).scalars().all())
                 product_map = {p.id: p for p in products}
 
             # 标记用户发送的未读消息为已读
             unread_user_messages = [
-                m for m in messages if m.sender_role == "user" and not m.is_read
+                m for m in messages
+                if m.sender_role == "user" and not m.is_read
             ]
             for m in unread_user_messages:
                 m.is_read = True
             if unread_user_messages:
                 db.commit()
 
-            return jsonify(
-                {
-                    "messages": [_message_to_dict(m, user_map, product_map) for m in messages],
-                }
-            )
+            return jsonify({
+                "messages": [_message_to_dict(m, user_map, merchant_map, product_map) for m in messages],
+            })
     except Exception as e:
         logger.error(f"获取客服对话详情失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
@@ -291,15 +292,16 @@ def merchant_reply(user_id: int):
             if not user:
                 return jsonify({"error": "not_found", "message": "用户不存在"}), 404
 
-            latest = (
-                db.execute(
-                    select(CustomerServiceMessage)
-                    .where(CustomerServiceMessage.user_id == user_id)
-                    .order_by(desc(CustomerServiceMessage.created_at))
-                )
-                .scalars()
-                .first()
-            )
+            # 当前登录的商家账号也是一个 User 记录
+            merchant_user = db.get(User, merchant["user_id"])
+            if not merchant_user:
+                return jsonify({"error": "not_found", "message": "商家账号不存在"}), 404
+
+            latest = db.execute(
+                select(CustomerServiceMessage)
+                .where(CustomerServiceMessage.user_id == user_id)
+                .order_by(desc(CustomerServiceMessage.created_at))
+            ).scalars().first()
             product_id = product_id or (latest.product_id if latest else None)
 
             if product_id:
@@ -310,6 +312,7 @@ def merchant_reply(user_id: int):
             msg = CustomerServiceMessage(
                 user_id=user_id,
                 product_id=product_id,
+                sender_id=merchant_user.id,
                 sender_role="merchant",
                 content=content,
                 is_read=True,
@@ -324,12 +327,10 @@ def merchant_reply(user_id: int):
                 if product:
                     product_map[msg.product_id] = product
 
-            return jsonify(
-                {
-                    "message": "回复成功",
-                    "data": _message_to_dict(msg, {user_id: user}, product_map),
-                }
-            ), 201
+            return jsonify({
+                "message": "回复成功",
+                "data": _message_to_dict(msg, {user_id: user}, {merchant_user.id: merchant_user}, product_map),
+            }), 201
     except Exception as e:
         logger.error(f"商家回复失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
@@ -369,11 +370,9 @@ def merchant_profile():
 
     try:
         with SessionLocal() as db:
-            merchant = (
-                db.execute(select(User).where(User.role == "merchant").order_by(User.id))
-                .scalars()
-                .first()
-            )
+            merchant = db.execute(
+                select(User).where(User.role == "merchant").order_by(User.id)
+            ).scalars().first()
             if not merchant:
                 return jsonify({"error": "not_found", "message": "暂无商家信息"}), 404
             return jsonify({"merchant": merchant.to_dict()})
@@ -391,15 +390,13 @@ def merchant_unread_count():
 
     try:
         with SessionLocal() as db:
-            count = (
-                db.execute(
-                    select(func.count(CustomerServiceMessage.id)).where(
-                        CustomerServiceMessage.sender_role == "user",
-                        not CustomerServiceMessage.is_read,
-                    )
-                ).scalar()
-                or 0
-            )
+            count = db.execute(
+                select(func.count(CustomerServiceMessage.id))
+                .where(
+                    CustomerServiceMessage.sender_role == "user",
+                    CustomerServiceMessage.is_read == False,
+                )
+            ).scalar() or 0
 
             return jsonify({"count": count})
     except Exception as e:

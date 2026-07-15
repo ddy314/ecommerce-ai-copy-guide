@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api, type CopyGenerationResponse } from '../api'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -35,7 +35,6 @@ const products = ref<Product[]>([])
 const selectedProductId = ref<number | null>(null)
 const productsLoading = ref(false)
 
-/** 拉取类目列表（附带 category_counts） */
 async function fetchCategories() {
   try {
     const response = await fetch(`${API_BASE}/api/products?page=1&page_size=1`)
@@ -48,7 +47,6 @@ async function fetchCategories() {
   }
 }
 
-/** 选择类目后拉取该类目下的商品列表 */
 async function onCategoryChange() {
   products.value = []
   selectedProductId.value = null
@@ -72,7 +70,6 @@ async function onCategoryChange() {
   }
 }
 
-/** 选择商品后自动填充表单字段 */
 function onProductChange() {
   if (selectedProductId.value == null) return
   const product = products.value.find((p) => p.id === selectedProductId.value)
@@ -90,16 +87,9 @@ const styleOptions = [
   { value: '促销', desc: '限时优惠，刺激下单', icon: '▲' },
 ]
 
-// 一键复制状态
 const copied = ref(false)
-
-/** 可编辑的结果副本 */
 const editableResult = ref<CopyGenerationResponse | null>(null)
-
-/** 编辑模式下卖点文本 */
 const editableSellingPointsText = ref('')
-
-/** 是否为编辑模式 */
 const editingResult = ref(false)
 
 function enterEditMode() {
@@ -117,6 +107,7 @@ function saveEdit() {
     .filter(Boolean)
   result.value = { ...editableResult.value }
   editingResult.value = false
+  editableResult.value = null
   editableSellingPointsText.value = ''
 }
 
@@ -126,7 +117,6 @@ function cancelEdit() {
   editableSellingPointsText.value = ''
 }
 
-/** 拼接文案结果为纯文本 */
 function buildCopyText(r: CopyGenerationResponse): string {
   return [
     `【${r.style}风格】${r.title}`,
@@ -169,9 +159,7 @@ async function copyResult() {
     document.body.removeChild(textarea)
   }
   copied.value = true
-  setTimeout(() => {
-    copied.value = false
-  }, 2000)
+  setTimeout(() => (copied.value = false), 2000)
 }
 
 async function handleSubmit() {
@@ -255,6 +243,8 @@ async function confirmImport() {
   }
 }
 
+const currentStep = computed(() => (result.value ? 3 : 2))
+
 onMounted(() => {
   fetchCategories()
 })
@@ -269,16 +259,25 @@ onMounted(() => {
           <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
         </svg>
       </div>
-      <div>
+      <div class="page-header__text">
         <h1>商品文案生成</h1>
-        <p>输入商品信息，AI 将生成标题、卖点、详情页文案和广告语</p>
+        <p>输入商品信息，AI 一键生成标题、卖点、详情页文案和广告语</p>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div
+        v-for="(s, idx) in ['选择商品', '设置参数', '生成文案']"
+        :key="idx"
+        :class="['step', { active: idx + 1 <= currentStep, current: idx + 1 === currentStep }]"
+      >
+        <span class="step__num">{{ idx + 1 }}</span>
+        <span class="step__label">{{ s }}</span>
       </div>
     </div>
 
     <div class="content-grid">
-      <!-- 左侧输入区 -->
       <form class="input-form" @submit.prevent="handleSubmit">
-        <!-- 输入模式切换 -->
         <div class="mode-tabs">
           <button
             type="button"
@@ -296,9 +295,8 @@ onMounted(() => {
           </button>
         </div>
 
-        <!-- 数据库选择 -->
-        <div v-if="inputMode === 'db'" class="form-group mode-panel">
-          <label>选择商品</label>
+        <div v-if="inputMode === 'db'" class="mode-panel">
+          <label class="field-label">选择商品</label>
           <div class="select-row">
             <select v-model="selectedCategory" class="select-item" @change="onCategoryChange">
               <option value="">请选择类目</option>
@@ -321,31 +319,30 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 手动输入 -->
         <template v-if="inputMode === 'manual'">
           <div class="form-group">
-            <label>商品名称 <span class="required">*</span></label>
+            <label class="field-label">商品名称 <span class="required">*</span></label>
             <input v-model="form.product_name" type="text" placeholder="例如：云感护腰办公椅" />
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>商品类目</label>
+              <label class="field-label">商品类目</label>
               <input v-model="form.category" type="text" placeholder="例如：办公家具" />
             </div>
             <div class="form-group">
-              <label>参考价格（元）</label>
+              <label class="field-label">参考价格（元）</label>
               <input v-model="form.price" type="number" step="0.01" placeholder="0.00" />
             </div>
           </div>
         </template>
 
         <div class="form-group">
-          <label>目标人群</label>
+          <label class="field-label">目标人群</label>
           <input v-model="form.audience" type="text" placeholder="例如：久坐办公人群" />
         </div>
 
         <div class="form-group">
-          <label>商品卖点（每行一个）</label>
+          <label class="field-label">商品卖点（每行一个）</label>
           <textarea
             v-model="form.selling_points_text"
             rows="4"
@@ -354,7 +351,7 @@ onMounted(() => {
         </div>
 
         <div class="form-group">
-          <label>文案风格</label>
+          <label class="field-label">文案风格</label>
           <div class="style-options">
             <label
               v-for="opt in styleOptions"
@@ -376,7 +373,6 @@ onMounted(() => {
         </button>
       </form>
 
-      <!-- 右侧结果区 -->
       <div class="result-panel">
         <div v-if="error" class="error-message">{{ error }}</div>
 
@@ -387,18 +383,13 @@ onMounted(() => {
               <span class="meta-product">{{ result.product_name }}</span>
             </div>
             <div class="result-actions">
-              <button class="action-btn" @click="copyResult">
-                {{ copied ? '已复制' : '复制' }}
-              </button>
+              <button class="action-btn" @click="copyResult">{{ copied ? '已复制' : '复制' }}</button>
               <button class="action-btn" @click="downloadTxt">下载 txt</button>
-              <button class="action-btn action-btn--primary" @click="openImportModal">
-                导入商品管理
-              </button>
+              <button class="action-btn action-btn--primary" @click="openImportModal">导入商品管理</button>
             </div>
           </div>
 
-          <!-- 推荐标题 -->
-          <div class="result-section">
+          <div class="result-card">
             <div class="section-label">
               <span class="section-dot"></span>
               <h3>推荐标题</h3>
@@ -409,8 +400,7 @@ onMounted(() => {
             <p v-else class="highlight-text">{{ result.title }}</p>
           </div>
 
-          <!-- 商品卖点 -->
-          <div class="result-section">
+          <div class="result-card">
             <div class="section-label">
               <span class="section-dot"></span>
               <h3>商品卖点</h3>
@@ -423,8 +413,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- 详情页文案 -->
-          <div class="result-section">
+          <div class="result-card">
             <div class="section-label">
               <span class="section-dot"></span>
               <h3>详情页文案</h3>
@@ -435,8 +424,7 @@ onMounted(() => {
             <p v-else class="detail-copy">{{ result.detail_copy }}</p>
           </div>
 
-          <!-- 广告语 -->
-          <div class="result-section">
+          <div class="result-card result-card--slogan">
             <div class="section-label">
               <span class="section-dot"></span>
               <h3>广告语</h3>
@@ -447,7 +435,6 @@ onMounted(() => {
             <blockquote v-else>{{ result.ad_slogan }}</blockquote>
           </div>
 
-          <!-- 编辑操作 -->
           <div class="edit-actions">
             <template v-if="!editingResult">
               <button class="btn-ghost" @click="enterEditMode">✎ 编辑文案</button>
@@ -459,7 +446,13 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-else-if="!loading" class="empty-state">
+        <div v-else-if="loading" class="skeleton-wrap">
+          <div class="skeleton skeleton--title"></div>
+          <div v-for="i in 3" :key="i" class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--slogan"></div>
+        </div>
+
+        <div v-else class="empty-state">
           <div class="empty-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M12 20h9"></path>
@@ -472,7 +465,6 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 导入商品管理弹窗 -->
     <transition name="modal">
       <div v-if="importModalVisible" class="modal-overlay" @click.self="closeImportModal">
         <div class="modal modal--sm">
@@ -519,49 +511,99 @@ onMounted(() => {
 .feature-page {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 40px 20px;
+  padding: 36px 20px 48px;
 }
 
 .page-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 32px;
+  gap: 18px;
+  margin-bottom: 28px;
 }
 
 .page-header__icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
   background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 10px 24px rgba(217, 95, 45, 0.25);
+  box-shadow: 0 12px 28px rgba(217, 95, 45, 0.28);
+  flex-shrink: 0;
 }
 
 .page-header__icon svg {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
 }
 
-.page-header h1 {
-  font-size: 32px;
+.page-header__text h1 {
+  font-size: 30px;
   margin: 0 0 6px 0;
   color: var(--ink);
 }
 
-.page-header p {
+.page-header__text p {
   color: var(--muted);
   margin: 0;
   font-size: 15px;
 }
 
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  padding: 14px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  transition: color 0.2s;
+}
+
+.step__num {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 13px;
+}
+
+.step.active .step__num {
+  background: var(--brand);
+  color: #fff;
+}
+
+.step.current {
+  color: var(--brand-dark);
+}
+
+.step:not(:last-child)::after {
+  content: '';
+  width: 28px;
+  height: 1px;
+  background: var(--line);
+  margin-left: 4px;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  gap: 28px;
   align-items: start;
 }
 
@@ -573,24 +615,24 @@ onMounted(() => {
   min-width: 0;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 24px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  border-radius: 22px;
+  padding: 26px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
 
 .mode-tabs {
   display: flex;
-  gap: 8px;
-  padding: 4px;
-  background: rgba(0, 0, 0, 0.03);
-  border-radius: 12px;
+  gap: 6px;
+  padding: 5px;
+  background: rgba(0, 0, 0, 0.035);
+  border-radius: 14px;
 }
 
 .mode-tab {
   flex: 1;
-  padding: 10px 16px;
+  padding: 11px 16px;
   border: none;
-  border-radius: 10px;
+  border-radius: 11px;
   background: transparent;
   color: var(--muted);
   font-size: 14px;
@@ -602,7 +644,7 @@ onMounted(() => {
 .mode-tab.active {
   background: #fff;
   color: var(--brand);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
 }
 
 .mode-panel {
@@ -624,7 +666,7 @@ onMounted(() => {
   gap: 14px;
 }
 
-.form-group label {
+.field-label {
   font-weight: 700;
   font-size: 14px;
   color: var(--ink);
@@ -639,7 +681,7 @@ onMounted(() => {
 .form-group textarea {
   padding: 12px 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 13px;
   font-size: 15px;
   font-family: inherit;
   background: #fff;
@@ -666,7 +708,7 @@ onMounted(() => {
 
 .form-group textarea {
   resize: vertical;
-  min-height: 90px;
+  min-height: 96px;
   line-height: 1.6;
 }
 
@@ -704,11 +746,12 @@ onMounted(() => {
 
 .style-option:hover {
   border-color: var(--brand);
+  transform: translateY(-1px);
 }
 
 .style-option.active {
   border-color: var(--brand);
-  background: rgba(217, 95, 45, 0.06);
+  background: linear-gradient(135deg, rgba(217, 95, 45, 0.08), rgba(217, 95, 45, 0.03));
   box-shadow: 0 0 0 1px var(--brand) inset;
 }
 
@@ -722,7 +765,7 @@ onMounted(() => {
   right: 12px;
   font-size: 16px;
   color: var(--brand);
-  opacity: 0.4;
+  opacity: 0.35;
 }
 
 .style-option.active .style-icon {
@@ -742,10 +785,10 @@ onMounted(() => {
 
 .btn-primary {
   padding: 14px 24px;
-  background: var(--brand);
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
   color: white;
   border: none;
-  border-radius: 12px;
+  border-radius: 13px;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
@@ -754,12 +797,12 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  box-shadow: 0 8px 20px rgba(217, 95, 45, 0.25);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--brand-dark);
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(217, 95, 45, 0.25);
+  box-shadow: 0 12px 26px rgba(217, 95, 45, 0.32);
 }
 
 .btn-primary:disabled {
@@ -777,7 +820,7 @@ onMounted(() => {
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 11px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -789,29 +832,35 @@ onMounted(() => {
   color: var(--brand);
 }
 
+.btn-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
 .result-panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 24px;
-  min-height: 520px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  border-radius: 22px;
+  padding: 26px;
+  min-height: 540px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
 
 .error-message {
-  background: #fee;
+  background: #fff0f0;
   color: #c33;
   padding: 12px 16px;
-  border-radius: 10px;
+  border-radius: 11px;
   margin-bottom: 16px;
   font-size: 14px;
+  border: 1px solid rgba(192, 57, 43, 0.15);
 }
 
 .result-content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  animation: fade-up 0.4s ease;
+  gap: 18px;
+  animation: fade-up 0.45s ease;
 }
 
 .result-meta {
@@ -880,11 +929,31 @@ onMounted(() => {
   color: #fff;
 }
 
-.result-section {
+.result-card {
   padding: 18px;
-  border-radius: 14px;
+  border-radius: 16px;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: transform 0.2s;
+}
+
+.result-card:hover {
+  transform: translateY(-1px);
+}
+
+.result-card--slogan {
+  background: linear-gradient(135deg, #211a14, #5d301e);
+  color: #ffe0bd;
+  border: none;
+}
+
+.result-card--slogan .section-label h3 {
+  color: #ffe0bd;
+}
+
+.result-card--slogan .section-dot {
+  background: #ffb380;
 }
 
 .section-label {
@@ -901,7 +970,7 @@ onMounted(() => {
   background: var(--brand);
 }
 
-.result-section h3 {
+.result-card h3 {
   font-size: 15px;
   margin: 0;
   color: var(--brand-dark);
@@ -927,7 +996,7 @@ onMounted(() => {
 .selling-points li {
   padding: 12px 16px;
   background: rgba(217, 95, 45, 0.06);
-  border-radius: 10px;
+  border-radius: 11px;
   border-left: 3px solid var(--brand);
   font-weight: 500;
 }
@@ -941,10 +1010,7 @@ onMounted(() => {
 
 blockquote {
   margin: 0;
-  padding: 18px;
-  background: linear-gradient(135deg, #211a14, #5d301e);
-  color: #ffe0bd;
-  border-radius: 14px;
+  padding: 0;
   font-size: 18px;
   font-style: italic;
   line-height: 1.5;
@@ -954,7 +1020,7 @@ blockquote {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding-top: 8px;
+  padding-top: 4px;
 }
 
 .edit-field input,
@@ -962,7 +1028,7 @@ blockquote {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--brand);
-  border-radius: 10px;
+  border-radius: 11px;
   font-size: 15px;
   font-family: inherit;
   background: #fff;
@@ -986,8 +1052,8 @@ blockquote {
 }
 
 .empty-icon {
-  width: 72px;
-  height: 72px;
+  width: 76px;
+  height: 76px;
   color: var(--line);
   margin-bottom: 16px;
 }
@@ -1002,6 +1068,43 @@ blockquote {
   margin-top: 6px;
 }
 
+.skeleton-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: pulse 1.6s infinite;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.04) 25%, rgba(0, 0, 0, 0.08) 50%, rgba(0, 0, 0, 0.04) 75%);
+  background-size: 200% 100%;
+  border-radius: 12px;
+  animation: shimmer 1.6s infinite;
+}
+
+.skeleton--title {
+  height: 32px;
+  width: 80%;
+}
+
+.skeleton--line {
+  height: 72px;
+}
+
+.skeleton--slogan {
+  height: 96px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+
 /* 弹窗 */
 .modal-overlay {
   position: fixed;
@@ -1012,6 +1115,7 @@ blockquote {
   justify-content: center;
   z-index: 100;
   padding: 20px;
+  backdrop-filter: blur(3px);
 }
 
 .modal {
@@ -1165,28 +1269,22 @@ blockquote {
 }
 
 @keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 820px) {
   .content-grid {
     grid-template-columns: 1fr;
+  }
+
+  .steps {
+    overflow-x: auto;
   }
 
   .style-options,

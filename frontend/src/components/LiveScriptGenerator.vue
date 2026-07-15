@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api, type LiveScriptResponse } from '../api'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const loading = ref(false)
 const error = ref<string | null>(null)
 const result = ref<LiveScriptResponse | null>(null)
+
+// 脚本类型：live / short
+const scriptType = ref<'live' | 'short'>('live')
 
 // ---------- 商品选择相关 ----------
 interface Product {
@@ -18,6 +21,7 @@ interface Product {
 }
 
 const categories = ref<string[]>([])
+const categoryCounts = ref<Record<string, number>>({})
 const products = ref<Product[]>([])
 const selectedCategory = ref('')
 const selectedProductId = ref<number | null>(null)
@@ -28,10 +32,17 @@ const form = ref({
   category: '',
   audience: '久坐办公人群',
   product_specs: '',
-  duration_minutes: 5,
+  duration: 5,
   tone: '热情自然',
   highlights_text: '护腰支撑\n透气坐垫\n稳固耐用',
 })
+
+const toneOptions = [
+  { value: '热情自然', desc: '亲切有活力，适合带货', icon: '🔥' },
+  { value: '专业严谨', desc: '突出参数与可信度', icon: '📐' },
+  { value: '轻松幽默', desc: '轻松有趣，易传播', icon: '😄' },
+  { value: '亲切温馨', desc: '像朋友聊天，拉近距离', icon: '💬' },
+]
 
 // 加载商品分类列表
 async function loadCategories() {
@@ -40,6 +51,7 @@ async function loadCategories() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const data = await response.json()
     categories.value = data.categories || []
+    categoryCounts.value = data.category_counts || {}
   } catch (e) {
     console.error('加载分类失败:', e)
   }
@@ -82,6 +94,9 @@ function onProductChange() {
   }
 }
 
+const durationLabel = computed(() => (scriptType.value === 'live' ? '直播时长（分钟）' : '视频时长（秒）'))
+const durationMax = computed(() => (scriptType.value === 'live' ? 120 : 180))
+
 async function handleSubmit() {
   if (!form.value.product_name.trim()) {
     error.value = '请输入商品名称'
@@ -94,7 +109,7 @@ async function handleSubmit() {
       product_name: form.value.product_name,
       product_specs: form.value.product_specs,
       audience: form.value.audience,
-      duration_minutes: form.value.duration_minutes,
+      duration_minutes: form.value.duration,
       tone: form.value.tone,
       highlights: form.value.highlights_text.split('\n').filter(s => s.trim()),
     })
@@ -108,13 +123,15 @@ async function handleSubmit() {
 /** 拼接脚本为 txt 文本 */
 function buildScriptText(r: LiveScriptResponse): string {
   const lines: string[] = []
-  lines.push(`直播脚本：${r.product_name}`)
-  lines.push(`时长：${r.duration_minutes} 分钟 | 语气：${r.tone}`)
+  const typeName = scriptType.value === 'live' ? '直播脚本' : '短视频脚本'
+  const unit = scriptType.value === 'live' ? '分钟' : '秒'
+  lines.push(`${typeName}：${r.product_name}`)
+  lines.push(`时长：${r.duration_minutes} ${unit} | 语气：${r.tone}`)
   lines.push('')
   if (r.segments?.length) {
     lines.push('【分段脚本】')
     r.segments.forEach((segment, index) => {
-      lines.push(`${index + 1}. ${segment.name}（${segment.minutes} 分钟）`)
+      lines.push(`${index + 1}. ${segment.name}（${segment.minutes} ${unit}）`)
       lines.push(segment.script)
       if (segment.action_hint) {
         lines.push(`动作提示：${segment.action_hint}`)
@@ -153,11 +170,14 @@ function downloadTxt() {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
+  const typeName = scriptType.value === 'live' ? '直播脚本' : '短视频脚本'
   link.href = url
-  link.download = `直播脚本_${result.value.product_name}_${new Date().toISOString().slice(0, 10)}.txt`
+  link.download = `${typeName}_${result.value.product_name}_${new Date().toISOString().slice(0, 10)}.txt`
   link.click()
   URL.revokeObjectURL(url)
 }
+
+const currentStep = computed(() => (result.value ? 3 : 2))
 
 // 组件挂载时加载分类列表
 onMounted(() => {
@@ -174,16 +194,52 @@ onMounted(() => {
           <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
         </svg>
       </div>
-      <div>
-        <h1>直播脚本生成</h1>
-        <p>根据商品信息、卖点和直播时长生成分段脚本与互动问题</p>
+      <div class="page-header__text">
+        <h1>直播 / 短视频脚本生成</h1>
+        <p>根据商品信息、卖点和时长生成直播或短视频脚本与互动问题</p>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div
+        v-for="(s, idx) in ['选择商品', '设置参数', '生成脚本']"
+        :key="idx"
+        :class="['step', { active: idx + 1 <= currentStep, current: idx + 1 === currentStep }]"
+      >
+        <span class="step__num">{{ idx + 1 }}</span>
+        <span class="step__label">{{ s }}</span>
       </div>
     </div>
 
     <div class="content-grid">
       <form class="input-form" @submit.prevent="handleSubmit">
-        <div class="form-group product-select-group">
-          <label>从数据库选择商品</label>
+        <div class="form-group">
+          <label class="field-label">脚本类型</label>
+          <div class="type-tabs">
+            <button
+              type="button"
+              :class="['type-tab', { active: scriptType === 'live' }]"
+              @click="scriptType = 'live'"
+            >
+              <span class="type-icon">📺</span>
+              <span>直播脚本</span>
+            </button>
+            <button
+              type="button"
+              :class="['type-tab', { active: scriptType === 'short' }]"
+              @click="scriptType = 'short'"
+            >
+              <span class="type-icon">🎬</span>
+              <span>短视频脚本</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="card db-card">
+          <div class="card__title">
+            <span class="card__dot"></span>
+            从数据库选择商品
+          </div>
           <div class="select-row">
             <select
               v-model="selectedCategory"
@@ -191,7 +247,9 @@ onMounted(() => {
               @change="onCategoryChange"
             >
               <option value="">选择分类</option>
-              <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+              <option v-for="cat in categories" :key="cat" :value="cat">
+                {{ cat }}<template v-if="categoryCounts[cat]"> ({{ categoryCounts[cat] }})</template>
+              </option>
             </select>
             <select
               v-model="selectedProductId"
@@ -200,54 +258,63 @@ onMounted(() => {
               @change="onProductChange"
             >
               <option :value="null">选择商品</option>
-              <option v-for="product in products" :key="product.id" :value="product.id">
-                {{ product.name }}
-              </option>
+              <option v-if="productLoading" :value="null" disabled>加载中...</option>
+              <template v-else>
+                <option v-for="product in products" :key="product.id" :value="product.id">
+                  {{ product.name }}
+                </option>
+              </template>
             </select>
           </div>
-          <p v-if="productLoading" class="select-hint">商品加载中...</p>
         </div>
 
         <div class="form-group">
-          <label>商品名称 <span class="required">*</span></label>
+          <label class="field-label">商品名称 <span class="required">*</span></label>
           <input v-model="form.product_name" type="text" placeholder="例如：云感护腰办公椅" />
         </div>
 
         <div class="form-row">
           <div class="form-group">
-            <label>直播时长（分钟）</label>
+            <label class="field-label">{{ durationLabel }}</label>
             <input
-              v-model.number="form.duration_minutes"
+              v-model.number="form.duration"
               type="number"
               min="1"
-              max="120"
+              :max="durationMax"
               placeholder="5"
             />
           </div>
 
           <div class="form-group">
-            <label>直播语气</label>
-            <select v-model="form.tone">
-              <option value="热情自然">热情自然</option>
-              <option value="专业严谨">专业严谨</option>
-              <option value="轻松幽默">轻松幽默</option>
-              <option value="亲切温馨">亲切温馨</option>
-            </select>
+            <label class="field-label">目标观众</label>
+            <input v-model="form.audience" type="text" placeholder="例如：久坐办公人群" />
           </div>
         </div>
 
         <div class="form-group">
-          <label>目标观众</label>
-          <input v-model="form.audience" type="text" placeholder="例如：久坐办公人群" />
+          <label class="field-label">脚本语气</label>
+          <div class="tone-options">
+            <label
+              v-for="opt in toneOptions"
+              :key="opt.value"
+              class="tone-option"
+              :class="{ active: form.tone === opt.value }"
+            >
+              <input type="radio" v-model="form.tone" :value="opt.value" />
+              <span class="tone-icon">{{ opt.icon }}</span>
+              <span class="tone-name">{{ opt.value }}</span>
+              <span class="tone-desc">{{ opt.desc }}</span>
+            </label>
+          </div>
         </div>
 
         <div class="form-group">
-          <label>商品规格 / 卖点</label>
+          <label class="field-label">商品规格 / 卖点</label>
           <textarea v-model="form.product_specs" rows="3" placeholder="可填写核心参数或卖点描述"></textarea>
         </div>
 
         <div class="form-group">
-          <label>直播亮点（每行一个）</label>
+          <label class="field-label">脚本亮点（每行一个）</label>
           <textarea
             v-model="form.highlights_text"
             rows="3"
@@ -256,7 +323,7 @@ onMounted(() => {
         </div>
 
         <button type="submit" class="btn-primary" :disabled="loading">
-          <span class="btn-icon">🎬</span>
+          <span class="btn-icon">✨</span>
           {{ loading ? '生成中...' : '生成脚本' }}
         </button>
       </form>
@@ -267,8 +334,11 @@ onMounted(() => {
         <div v-if="result" class="result-content">
           <div class="result-meta">
             <div class="result-tags">
+              <span class="meta-tag">{{ scriptType === 'live' ? '直播' : '短视频' }}</span>
               <span class="meta-product">{{ result.product_name }}</span>
-              <span class="meta-tag">{{ result.duration_minutes }} 分钟</span>
+              <span class="meta-tag meta-tag--secondary">
+                {{ result.duration_minutes }} {{ scriptType === 'live' ? '分钟' : '秒' }}
+              </span>
               <span class="meta-tag meta-tag--secondary">{{ result.tone }}</span>
             </div>
             <div class="result-actions">
@@ -276,7 +346,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="result-section">
+          <div class="result-card">
             <div class="section-label">
               <span class="section-dot"></span>
               <h3>脚本概览</h3>
@@ -288,7 +358,7 @@ onMounted(() => {
               </div>
               <div class="overview-card">
                 <span class="overview-label">时长</span>
-                <span class="overview-value">{{ result.duration_minutes }} 分钟</span>
+                <span class="overview-value">{{ result.duration_minutes }} {{ scriptType === 'live' ? '分钟' : '秒' }}</span>
               </div>
               <div class="overview-card">
                 <span class="overview-label">语气</span>
@@ -297,7 +367,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="result-section">
+          <div class="result-card">
             <div class="section-label">
               <span class="section-dot"></span>
               <h3>分段脚本</h3>
@@ -308,7 +378,7 @@ onMounted(() => {
                   <span class="segment-number">{{ index + 1 }}</span>
                   <div class="segment-info">
                     <h4>{{ segment.name }}</h4>
-                    <span class="segment-duration">{{ segment.minutes }} 分钟</span>
+                    <span class="segment-duration">{{ segment.minutes }} {{ scriptType === 'live' ? '分钟' : '秒' }}</span>
                   </div>
                 </div>
                 <p class="segment-script">{{ segment.script }}</p>
@@ -319,7 +389,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div v-if="result.interaction_questions.length > 0" class="result-section">
+          <div v-if="result.interaction_questions.length > 0" class="result-card">
             <div class="section-label">
               <span class="section-dot section-dot--accent"></span>
               <h3>互动问题</h3>
@@ -331,7 +401,7 @@ onMounted(() => {
             </ul>
           </div>
 
-          <div v-if="result.explanation_flow && result.explanation_flow.length > 0" class="result-section">
+          <div v-if="result.explanation_flow && result.explanation_flow.length > 0" class="result-card">
             <div class="section-label">
               <span class="section-dot section-dot--accent"></span>
               <h3>讲解流程</h3>
@@ -350,7 +420,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div v-if="result.conversion_scripts && result.conversion_scripts.length > 0" class="result-section">
+          <div v-if="result.conversion_scripts && result.conversion_scripts.length > 0" class="result-card">
             <div class="section-label">
               <span class="section-dot section-dot--accent"></span>
               <h3>转化话术</h3>
@@ -363,7 +433,13 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-else-if="!loading" class="empty-state">
+        <div v-else-if="loading" class="skeleton-wrap">
+          <div class="skeleton skeleton--title"></div>
+          <div v-for="i in 3" :key="i" class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--slogan"></div>
+        </div>
+
+        <div v-else class="empty-state">
           <div class="empty-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <polygon points="23 7 16 12 23 17 23 7"></polygon>
@@ -371,6 +447,7 @@ onMounted(() => {
             </svg>
           </div>
           <p>填写商品信息后点击“生成脚本”查看结果</p>
+          <span class="empty-hint">支持直播脚本与短视频脚本两种模式</span>
         </div>
       </div>
     </div>
@@ -381,49 +458,99 @@ onMounted(() => {
 .feature-page {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 40px 20px;
+  padding: 36px 20px 48px;
 }
 
 .page-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 32px;
+  gap: 18px;
+  margin-bottom: 28px;
 }
 
 .page-header__icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
   background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 10px 24px rgba(217, 95, 45, 0.25);
+  box-shadow: 0 12px 28px rgba(217, 95, 45, 0.28);
+  flex-shrink: 0;
 }
 
 .page-header__icon svg {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
 }
 
-.page-header h1 {
-  font-size: 32px;
+.page-header__text h1 {
+  font-size: 30px;
   margin: 0 0 6px 0;
   color: var(--ink);
 }
 
-.page-header p {
+.page-header__text p {
   color: var(--muted);
   margin: 0;
   font-size: 15px;
 }
 
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  padding: 14px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  transition: color 0.2s;
+}
+
+.step__num {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 13px;
+}
+
+.step.active .step__num {
+  background: var(--brand);
+  color: #fff;
+}
+
+.step.current {
+  color: var(--brand-dark);
+}
+
+.step:not(:last-child)::after {
+  content: '';
+  width: 28px;
+  height: 1px;
+  background: var(--line);
+  margin-left: 4px;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  gap: 28px;
   align-items: start;
 }
 
@@ -435,9 +562,75 @@ onMounted(() => {
   min-width: 0;
   background: var(--panel);
   border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 26px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.type-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: rgba(0, 0, 0, 0.035);
+  border-radius: 14px;
+}
+
+.type-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 11px 16px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.type-tab.active {
+  background: #fff;
+  color: var(--brand);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+}
+
+.type-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 20px;
-  padding: 24px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  padding: 22px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.db-card {
+  padding: 18px;
+  background: rgba(217, 95, 45, 0.03);
+}
+
+.card__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 14px;
+}
+
+.card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
 }
 
 .form-group {
@@ -449,7 +642,7 @@ onMounted(() => {
   min-width: 0;
 }
 
-.form-group label {
+.field-label {
   font-weight: 700;
   font-size: 14px;
   color: var(--ink);
@@ -464,7 +657,7 @@ onMounted(() => {
 .form-group textarea {
   padding: 12px 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 13px;
   font-size: 15px;
   font-family: inherit;
   background: #fff;
@@ -504,36 +697,87 @@ onMounted(() => {
 }
 
 /* 商品选择下拉区 */
-.product-select-group .select-row {
+.select-row {
   display: flex;
   gap: 12px;
   min-width: 0;
   max-width: 100%;
 }
 
-.product-select-group .select-item {
+.select-row .select-item {
   flex: 1;
   min-width: 0;
   cursor: pointer;
 }
 
-.product-select-group .select-item:disabled {
+.select-row .select-item:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.product-select-group .select-hint {
-  margin: 4px 0 0 0;
-  font-size: 13px;
+.tone-options {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.tone-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.tone-option:hover {
+  border-color: var(--brand);
+  transform: translateY(-1px);
+}
+
+.tone-option.active {
+  border-color: var(--brand);
+  background: linear-gradient(135deg, rgba(217, 95, 45, 0.08), rgba(217, 95, 45, 0.03));
+  box-shadow: 0 0 0 1px var(--brand) inset;
+}
+
+.tone-option input {
+  display: none;
+}
+
+.tone-icon {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 16px;
+  opacity: 0.35;
+}
+
+.tone-option.active .tone-icon {
+  opacity: 1;
+}
+
+.tone-name {
+  font-weight: 700;
+  color: var(--brand-dark);
+}
+
+.tone-desc {
+  font-size: 12px;
   color: var(--muted);
+  line-height: 1.4;
 }
 
 .btn-primary {
   padding: 14px 24px;
-  background: var(--brand);
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
   color: white;
   border: none;
-  border-radius: 12px;
+  border-radius: 13px;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
@@ -542,12 +786,12 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  box-shadow: 0 8px 20px rgba(217, 95, 45, 0.25);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--brand-dark);
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(217, 95, 45, 0.25);
+  box-shadow: 0 12px 26px rgba(217, 95, 45, 0.32);
 }
 
 .btn-primary:disabled {
@@ -563,26 +807,27 @@ onMounted(() => {
 .result-panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 24px;
-  min-height: 520px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  border-radius: 22px;
+  padding: 26px;
+  min-height: 540px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
 
 .error-message {
-  background: #fee;
+  background: #fff0f0;
   color: #c33;
   padding: 12px 16px;
-  border-radius: 10px;
+  border-radius: 11px;
   margin-bottom: 16px;
   font-size: 14px;
+  border: 1px solid rgba(192, 57, 43, 0.15);
 }
 
 .result-content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  animation: fade-up 0.4s ease;
+  gap: 18px;
+  animation: fade-up 0.45s ease;
 }
 
 .result-meta {
@@ -646,11 +891,17 @@ onMounted(() => {
   color: var(--brand);
 }
 
-.result-section {
+.result-card {
   padding: 18px;
-  border-radius: 14px;
+  border-radius: 16px;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: transform 0.2s;
+}
+
+.result-card:hover {
+  transform: translateY(-1px);
 }
 
 .section-label {
@@ -671,7 +922,7 @@ onMounted(() => {
   background: var(--green, #1f8a5b);
 }
 
-.result-section h3 {
+.result-card h3 {
   font-size: 15px;
   margin: 0;
   color: var(--brand-dark);
@@ -876,8 +1127,8 @@ onMounted(() => {
 }
 
 .empty-icon {
-  width: 72px;
-  height: 72px;
+  width: 76px;
+  height: 76px;
   color: var(--line);
   margin-bottom: 16px;
 }
@@ -887,28 +1138,69 @@ onMounted(() => {
   height: 100%;
 }
 
-@keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.empty-hint {
+  font-size: 13px;
+  margin-top: 6px;
 }
 
-@media (max-width: 768px) {
+.skeleton-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: pulse 1.6s infinite;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.04) 25%, rgba(0, 0, 0, 0.08) 50%, rgba(0, 0, 0, 0.04) 75%);
+  background-size: 200% 100%;
+  border-radius: 12px;
+  animation: shimmer 1.6s infinite;
+}
+
+.skeleton--title {
+  height: 32px;
+  width: 80%;
+}
+
+.skeleton--line {
+  height: 72px;
+}
+
+.skeleton--slogan {
+  height: 96px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 820px) {
   .content-grid {
     grid-template-columns: 1fr;
   }
 
+  .steps {
+    overflow-x: auto;
+  }
+
   .form-row,
-  .overview-cards {
+  .overview-cards,
+  .tone-options {
     grid-template-columns: 1fr;
   }
 
-  .product-select-group .select-row {
+  .select-row {
     flex-direction: column;
   }
 

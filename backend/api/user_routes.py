@@ -1,5 +1,4 @@
 """用户前台路由 - 购物车/订单/地址/收藏/RAG问答/评论上传"""
-
 from __future__ import annotations
 
 import json
@@ -9,7 +8,7 @@ import time
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, Response
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 
 from backend.api.auth_routes import (
     _save_uploaded_file,
@@ -21,7 +20,7 @@ from backend.models.product import Product
 from backend.models.review import Review
 from backend.models.user import UserAddress, UserFavorite, BrowseHistory
 from backend.models.shopping import CartItem, Order, OrderItem
-from backend.services.auth_service import require_auth
+from backend.services.auth_service import require_auth, get_user_from_request
 from backend.services.rag_service import RAGService
 from backend.services.file_upload import FileUploadService
 from backend.services.ai_provider import get_ai_provider
@@ -48,7 +47,6 @@ def _safe_int(val, default=None):
 
 # ===== 购物车 =====
 
-
 @user_bp.get("/user/cart")
 def get_cart():
     """获取购物车"""
@@ -58,11 +56,9 @@ def get_cart():
 
     try:
         with SessionLocal() as db:
-            items = list(
-                db.execute(select(CartItem).where(CartItem.user_id == user_payload["user_id"]))
-                .scalars()
-                .all()
-            )
+            items = list(db.execute(
+                select(CartItem).where(CartItem.user_id == user_payload["user_id"])
+            ).scalars().all())
 
             cart_data = []
             total = 0.0
@@ -202,11 +198,9 @@ def clear_cart():
 
     try:
         with SessionLocal() as db:
-            items = list(
-                db.execute(select(CartItem).where(CartItem.user_id == user_payload["user_id"]))
-                .scalars()
-                .all()
-            )
+            items = list(db.execute(
+                select(CartItem).where(CartItem.user_id == user_payload["user_id"])
+            ).scalars().all())
             for item in items:
                 db.delete(item)
             db.commit()
@@ -217,7 +211,6 @@ def clear_cart():
 
 
 # ===== 订单 =====
-
 
 @user_bp.post("/user/orders")
 def create_order():
@@ -244,7 +237,7 @@ def create_order():
                 address = db.execute(
                     select(UserAddress).where(
                         UserAddress.user_id == user_payload["user_id"],
-                        UserAddress.is_default,
+                        UserAddress.is_default == True,
                     )
                 ).scalar_one_or_none()
             if not address:
@@ -261,25 +254,21 @@ def create_order():
                 if not product:
                     return jsonify({"error": "invalid_product", "message": "商品不存在"}), 400
                 if quantity < 1:
-                    return jsonify(
-                        {"error": "invalid_quantity", "message": "购买数量不能小于 1"}
-                    ), 400
+                    return jsonify({"error": "invalid_quantity", "message": "购买数量不能小于 1"}), 400
                 total_amount += (product.price or 0) * quantity
-                order_items_data.append(
-                    {
-                        "product_id": product.id,
-                        "product_name": product.name,
-                        "price": product.price or 0,
-                        "quantity": quantity,
-                        "image_url": product.image_url or "",
-                    }
-                )
+                order_items_data.append({
+                    "product_id": product.id,
+                    "product_name": product.name,
+                    "price": product.price or 0,
+                    "quantity": quantity,
+                    "image_url": product.image_url or "",
+                })
                 first_product_id = product.id
             else:
                 # 模式 B：从购物车选中项下单
                 stmt = select(CartItem).where(
                     CartItem.user_id == user_payload["user_id"],
-                    CartItem.selected,
+                    CartItem.selected == True,
                 )
                 if item_ids:
                     stmt = stmt.where(CartItem.id.in_(item_ids))
@@ -293,15 +282,13 @@ def create_order():
                     if not product:
                         continue
                     total_amount += (product.price or 0) * ci.quantity
-                    order_items_data.append(
-                        {
-                            "product_id": product.id,
-                            "product_name": product.name,
-                            "price": product.price or 0,
-                            "quantity": ci.quantity,
-                            "image_url": product.image_url or "",
-                        }
-                    )
+                    order_items_data.append({
+                        "product_id": product.id,
+                        "product_name": product.name,
+                        "price": product.price or 0,
+                        "quantity": ci.quantity,
+                        "image_url": product.image_url or "",
+                    })
 
                 if not order_items_data:
                     return jsonify({"error": "empty_cart", "message": "没有有效商品"}), 400
@@ -449,18 +436,16 @@ def list_orders():
             all_orders = list(db.execute(stmt).scalars().all())
             total = len(all_orders)
             total_pages = max(1, (total + page_size - 1) // page_size)
-            orders = all_orders[(page - 1) * page_size : page * page_size]
+            orders = all_orders[(page - 1) * page_size: page * page_size]
             orders_data = [o.to_dict() for o in orders]
 
-            return jsonify(
-                {
-                    "total": total,
-                    "page": page,
-                    "page_size": page_size,
-                    "total_pages": total_pages,
-                    "orders": orders_data,
-                }
-            )
+            return jsonify({
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "orders": orders_data,
+            })
     except Exception as e:
         logger.error(f"获取订单列表失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
@@ -509,9 +494,7 @@ def apply_return(order_id: int):
                 return jsonify({"error": "not_found", "message": "订单不存在"}), 404
 
             if order.status in ("pending", "cancelled"):
-                return jsonify(
-                    {"error": "invalid_status", "message": "当前订单状态不可申请退换货"}
-                ), 400
+                return jsonify({"error": "invalid_status", "message": "当前订单状态不可申请退换货"}), 400
 
             order.status = "returning"
             order.return_status = "returning"
@@ -558,7 +541,6 @@ def fill_return_tracking(order_id: int):
 
 # ===== 收货地址 =====
 
-
 @user_bp.get("/user/addresses")
 def list_addresses():
     """地址列表"""
@@ -568,15 +550,10 @@ def list_addresses():
 
     try:
         with SessionLocal() as db:
-            addresses = list(
-                db.execute(
-                    select(UserAddress)
-                    .where(UserAddress.user_id == user_payload["user_id"])
-                    .order_by(desc(UserAddress.is_default))
-                )
-                .scalars()
-                .all()
-            )
+            addresses = list(db.execute(
+                select(UserAddress).where(UserAddress.user_id == user_payload["user_id"])
+                .order_by(desc(UserAddress.is_default))
+            ).scalars().all())
 
             return jsonify({"addresses": [a.to_dict() for a in addresses]})
     except Exception as e:
@@ -601,23 +578,17 @@ def add_address():
     detail = data.get("detail", "")
 
     if not name or not phone or not detail:
-        return jsonify(
-            {"error": "invalid_input", "message": "收货人、手机号和详细地址不能为空"}
-        ), 400
+        return jsonify({"error": "invalid_input", "message": "收货人、手机号和详细地址不能为空"}), 400
 
     try:
         with SessionLocal() as db:
             if data.get("is_default"):
-                existing_defaults = (
-                    db.execute(
-                        select(UserAddress).where(
-                            UserAddress.user_id == user_payload["user_id"],
-                            UserAddress.is_default,
-                        )
+                existing_defaults = db.execute(
+                    select(UserAddress).where(
+                        UserAddress.user_id == user_payload["user_id"],
+                        UserAddress.is_default == True,
                     )
-                    .scalars()
-                    .all()
-                )
+                ).scalars().all()
                 for addr in existing_defaults:
                     addr.is_default = False
 
@@ -657,30 +628,18 @@ def update_address(address_id: int):
             if not address or address.user_id != user_payload["user_id"]:
                 return jsonify({"error": "not_found", "message": "地址不存在"}), 404
 
-            field_map = {
-                "name": "name",
-                "recipient": "name",
-                "phone": "phone",
-                "province": "province",
-                "city": "city",
-                "district": "district",
-                "detail": "detail",
-            }
+            field_map = {"name": "name", "recipient": "name", "phone": "phone", "province": "province", "city": "city", "district": "district", "detail": "detail"}
             for frontend_field, backend_field in field_map.items():
                 if frontend_field in data:
                     setattr(address, backend_field, data[frontend_field])
             if "is_default" in data:
                 if data["is_default"]:
-                    others = (
-                        db.execute(
-                            select(UserAddress).where(
-                                UserAddress.user_id == user_payload["user_id"],
-                                UserAddress.is_default,
-                            )
+                    others = db.execute(
+                        select(UserAddress).where(
+                            UserAddress.user_id == user_payload["user_id"],
+                            UserAddress.is_default == True,
                         )
-                        .scalars()
-                        .all()
-                    )
+                    ).scalars().all()
                     for o in others:
                         o.is_default = False
                 address.is_default = bool(data["is_default"])
@@ -717,7 +676,6 @@ def delete_address(address_id: int):
 
 # ===== 收藏 =====
 
-
 @user_bp.get("/user/favorites")
 def list_favorites():
     """收藏列表"""
@@ -727,19 +685,17 @@ def list_favorites():
 
     try:
         with SessionLocal() as db:
-            favs = list(
-                db.execute(
-                    select(UserFavorite).where(UserFavorite.user_id == user_payload["user_id"])
-                )
-                .scalars()
-                .all()
-            )
+            favs = list(db.execute(
+                select(UserFavorite).where(UserFavorite.user_id == user_payload["user_id"])
+            ).scalars().all())
 
             result = []
             for fav in favs:
                 product = db.get(Product, fav.product_id)
                 if product:
-                    result.append(product.to_dict())
+                    p = product.to_dict()
+                    p["product_id"] = product.id
+                    result.append(p)
 
             return jsonify({"favorites": result, "total": len(result)})
     except Exception as e:
@@ -782,7 +738,6 @@ def toggle_favorite(product_id: int):
 
 # ===== 浏览记录 =====
 
-
 @user_bp.post("/user/history/<int:product_id>")
 def add_history(product_id: int):
     """添加浏览记录"""
@@ -815,16 +770,11 @@ def list_history():
 
     try:
         with SessionLocal() as db:
-            histories = list(
-                db.execute(
-                    select(BrowseHistory)
-                    .where(BrowseHistory.user_id == user_payload["user_id"])
-                    .order_by(desc(BrowseHistory.created_at))
-                    .limit(limit)
-                )
-                .scalars()
-                .all()
-            )
+            histories = list(db.execute(
+                select(BrowseHistory).where(BrowseHistory.user_id == user_payload["user_id"])
+                .order_by(desc(BrowseHistory.created_at))
+                .limit(limit)
+            ).scalars().all())
 
             result = []
             seen = set()
@@ -835,6 +785,7 @@ def list_history():
                 product = db.get(Product, h.product_id)
                 if product:
                     p = product.to_dict()
+                    p["product_id"] = product.id
                     p["viewed_at"] = h.created_at.isoformat() if h.created_at else None
                     result.append(p)
 
@@ -845,7 +796,6 @@ def list_history():
 
 
 # ===== RAG 智能问答 =====
-
 
 @user_bp.post("/user/qa/ask")
 def ask_question():
@@ -875,7 +825,7 @@ def ask_question():
 
 @user_bp.post("/user/qa/stream")
 def qa_stream():
-    """SSE 流式问答 - 逐行推送回答"""
+    """SSE 流式问答 - LLM 真实流式输出，逐 token 推送"""
     user_payload, error = require_auth(request)
     if error:
         return jsonify(error), 401
@@ -889,36 +839,13 @@ def qa_stream():
 
     def generate():
         try:
-            result = rag_service.answer_question(
+            # 使用新的流式问答方法 - LLM 逐 token 输出
+            for event in rag_service.answer_question_stream(
                 question=question,
                 product_id=product_id,
                 user_id=user_payload["user_id"],
-            )
-
-            answer = result.get("answer", "")
-            product_info = result.get("product")
-            related = result.get("related_products", [])
-
-            # 先推送商品卡片数据
-            if product_info:
-                yield f"data: {json.dumps({'type': 'product', 'data': product_info}, ensure_ascii=False)}\n\n"
-                time.sleep(0.05)
-
-            if related:
-                yield f"data: {json.dumps({'type': 'related', 'data': related}, ensure_ascii=False)}\n\n"
-                time.sleep(0.05)
-
-            # 逐行推送回答文本
-            lines = answer.split("\n")
-            for i, line in enumerate(lines):
-                chunk = {"type": "text", "content": line}
-                if i < len(lines) - 1:
-                    chunk["content"] += "\n"
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                time.sleep(0.08)
-
-            # 推送完成信号
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"SSE问答失败: {e}", exc_info=True)
@@ -943,21 +870,15 @@ def qa_history():
         return jsonify(error), 401
 
     from backend.models.knowledge_base import QARecord
-
     limit = _safe_int(request.args.get("limit"), 50) or 50
 
     try:
         with SessionLocal() as db:
-            records = list(
-                db.execute(
-                    select(QARecord)
-                    .where(QARecord.user_id == user_payload["user_id"])
-                    .order_by(desc(QARecord.created_at))
-                    .limit(limit)
-                )
-                .scalars()
-                .all()
-            )
+            records = list(db.execute(
+                select(QARecord).where(QARecord.user_id == user_payload["user_id"])
+                .order_by(desc(QARecord.created_at))
+                .limit(limit)
+            ).scalars().all())
 
             return jsonify({"records": [r.to_dict() for r in records]})
     except Exception as e:
@@ -966,7 +887,6 @@ def qa_history():
 
 
 # ===== 评论文件上传 =====
-
 
 @user_bp.post("/user/reviews/upload")
 def upload_reviews_file():
@@ -997,14 +917,12 @@ def upload_reviews_file():
         )
         result = ai_service.analyze_reviews(payload)
 
-        return jsonify(
-            {
-                "message": f"成功解析 {len(reviews)} 条评论",
-                "file_name": file.filename,
-                "review_count": len(reviews),
-                "analysis": result,
-            }
-        )
+        return jsonify({
+            "message": f"成功解析 {len(reviews)} 条评论",
+            "file_name": file.filename,
+            "review_count": len(reviews),
+            "analysis": result,
+        })
 
     except ValueError as e:
         return jsonify({"error": "parse_error", "message": str(e)}), 400
