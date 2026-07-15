@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, Response
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 
 from backend.api.auth_routes import (
     _save_uploaded_file,
@@ -20,7 +20,7 @@ from backend.models.product import Product
 from backend.models.review import Review
 from backend.models.user import UserAddress, UserFavorite, BrowseHistory
 from backend.models.shopping import CartItem, Order, OrderItem
-from backend.services.auth_service import require_auth
+from backend.services.auth_service import require_auth, get_user_from_request
 from backend.services.rag_service import RAGService
 from backend.services.file_upload import FileUploadService
 from backend.services.ai_provider import get_ai_provider
@@ -224,21 +224,11 @@ def create_order():
     pay_method = data.get("pay_method", "wechat")
     remark = data.get("remark", "")
     item_ids = data.get("item_ids", [])
+    product_id = _safe_int(data.get("product_id"))
+    quantity = _safe_int(data.get("quantity"), 1)
 
     try:
         with SessionLocal() as db:
-            # 获取购物车选中项
-            stmt = select(CartItem).where(
-                CartItem.user_id == user_payload["user_id"],
-                CartItem.selected.is_(True),
-            )
-            if item_ids:
-                stmt = stmt.where(CartItem.id.in_(item_ids))
-
-            cart_items = list(db.execute(stmt).scalars().all())
-            if not cart_items:
-                return jsonify({"error": "empty_cart", "message": "购物车没有选中商品"}), 400
-
             # 获取地址
             address = None
             if address_id:
@@ -247,33 +237,65 @@ def create_order():
                 address = db.execute(
                     select(UserAddress).where(
                         UserAddress.user_id == user_payload["user_id"],
-                        UserAddress.is_default.is_(True),
+                        UserAddress.is_default == True,
                     )
                 ).scalar_one_or_none()
             if not address:
                 return jsonify({"error": "no_address", "message": "请先添加收货地址"}), 400
 
-            # 计算总金额
+            # 计算总金额、组装订单项
             total_amount = 0.0
             order_items_data = []
-            for ci in cart_items:
-                product = db.get(Product, ci.product_id)
+            first_product_id = None
+
+            # 模式 A：直接购买（立即购买）
+            if product_id:
+                product = db.get(Product, product_id)
                 if not product:
-                    continue
-                total_amount += (product.price or 0) * ci.quantity
+                    return jsonify({"error": "invalid_product", "message": "商品不存在"}), 400
+                if quantity < 1:
+                    return jsonify({"error": "invalid_quantity", "message": "购买数量不能小于 1"}), 400
+                total_amount += (product.price or 0) * quantity
                 order_items_data.append({
                     "product_id": product.id,
                     "product_name": product.name,
                     "price": product.price or 0,
-                    "quantity": ci.quantity,
+                    "quantity": quantity,
                     "image_url": product.image_url or "",
                 })
+                first_product_id = product.id
+            else:
+                # 模式 B：从购物车选中项下单
+                stmt = select(CartItem).where(
+                    CartItem.user_id == user_payload["user_id"],
+                    CartItem.selected == True,
+                )
+                if item_ids:
+                    stmt = stmt.where(CartItem.id.in_(item_ids))
 
-            if not order_items_data:
-                return jsonify({"error": "empty_cart", "message": "没有有效商品"}), 400
+                cart_items = list(db.execute(stmt).scalars().all())
+                if not cart_items:
+                    return jsonify({"error": "empty_cart", "message": "购物车没有选中商品"}), 400
+
+                for ci in cart_items:
+                    product = db.get(Product, ci.product_id)
+                    if not product:
+                        continue
+                    total_amount += (product.price or 0) * ci.quantity
+                    order_items_data.append({
+                        "product_id": product.id,
+                        "product_name": product.name,
+                        "price": product.price or 0,
+                        "quantity": ci.quantity,
+                        "image_url": product.image_url or "",
+                    })
+
+                if not order_items_data:
+                    return jsonify({"error": "empty_cart", "message": "没有有效商品"}), 400
+
+                first_product_id = cart_items[0].product_id
 
             # 创建订单
-            first_product_id = cart_items[0].product_id
             order_no = generate_order_no(db, first_product_id)
             order = Order(
                 order_no=order_no,
@@ -299,9 +321,10 @@ def create_order():
                 )
                 db.add(oi)
 
-            # 清除已下单的购物车项
-            for ci in cart_items:
-                db.delete(ci)
+            # 购物车模式下清除已下单的购物车项
+            if not product_id:
+                for ci in cart_items:
+                    db.delete(ci)
 
             db.commit()
             db.refresh(order)
@@ -563,7 +586,7 @@ def add_address():
                 existing_defaults = db.execute(
                     select(UserAddress).where(
                         UserAddress.user_id == user_payload["user_id"],
-                        UserAddress.is_default.is_(True),
+                        UserAddress.is_default == True,
                     )
                 ).scalars().all()
                 for addr in existing_defaults:
@@ -614,7 +637,7 @@ def update_address(address_id: int):
                     others = db.execute(
                         select(UserAddress).where(
                             UserAddress.user_id == user_payload["user_id"],
-                            UserAddress.is_default.is_(True),
+                            UserAddress.is_default == True,
                         )
                     ).scalars().all()
                     for o in others:

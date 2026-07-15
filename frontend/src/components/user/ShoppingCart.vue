@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, inject } from 'vue'
+import CheckoutModal, { type CheckoutItem } from './CheckoutModal.vue'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // ---------- 类型定义 ----------
 interface CartItem {
@@ -15,17 +16,6 @@ interface CartItem {
   selected: boolean
 }
 
-interface Address {
-  id: number
-  recipient: string
-  phone: string
-  province: string
-  city: string
-  district: string
-  detail: string
-  is_default: boolean
-}
-
 // ---------- 导航 ----------
 const navigate = inject<(page: string) => void>('navigate', () => {})
 const switchToOrdersTab = inject<() => void>('switchToOrdersTab', () => navigate('orders'))
@@ -37,23 +27,7 @@ const cartItems = ref<CartItem[]>([])
 
 // 结算弹窗
 const checkoutVisible = ref(false)
-const checkoutLoading = ref(false)
-const addresses = ref<Address[]>([])
-const selectedAddressId = ref<number | null>(null)
-const payMethod = ref<'wechat' | 'alipay'>('wechat')
-const remark = ref('')
-
-// 新增地址表单
-const showAddressForm = ref(false)
-const addressForm = ref({
-  recipient: '',
-  phone: '',
-  province: '',
-  city: '',
-  district: '',
-  detail: '',
-})
-const addressFormLoading = ref(false)
+const checkoutItems = ref<CheckoutItem[]>([])
 
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -180,122 +154,35 @@ async function removeItem(item: CartItem) {
 }
 
 // ---------- 结算流程 ----------
-async function openCheckout() {
+function openCheckout() {
   if (selectedItems.value.length === 0) {
     showToast('请先选择商品', 'error')
     return
   }
+  checkoutItems.value = selectedItems.value.map((item) => ({
+    cart_item_id: item.id,
+    product_id: item.product_id,
+    product_name: item.product_name,
+    product_image: item.product_image,
+    product_price: item.product_price,
+    product_category: item.product_category,
+    quantity: item.quantity,
+  }))
   checkoutVisible.value = true
-  await loadAddresses()
-}
-
-async function loadAddresses() {
-  try {
-    const response = await fetch(`${API_BASE}/api/user/addresses`, {
-      headers: authHeaders(),
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const data = await response.json()
-    addresses.value = data.addresses || data || []
-    // 自动选中默认地址
-    const defaultAddr = addresses.value.find((a) => a.is_default)
-    if (defaultAddr) {
-      selectedAddressId.value = defaultAddr.id
-    } else if (addresses.value.length > 0) {
-      selectedAddressId.value = addresses.value[0].id
-    }
-  } catch {
-    showToast('加载地址失败', 'error')
-  }
-}
-
-function toggleAddressForm() {
-  showAddressForm.value = !showAddressForm.value
-  if (showAddressForm.value) {
-    addressForm.value = {
-      recipient: '',
-      phone: '',
-      province: '',
-      city: '',
-      district: '',
-      detail: '',
-    }
-  }
-}
-
-async function saveAddress() {
-  if (!addressForm.value.recipient || !addressForm.value.phone || !addressForm.value.detail) {
-    showToast('请填写完整收货信息', 'error')
-    return
-  }
-  addressFormLoading.value = true
-  try {
-    const response = await fetch(`${API_BASE}/api/user/addresses`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify(addressForm.value),
-    })
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new Error(err.message || `HTTP ${response.status}`)
-    }
-    const data = await response.json()
-    showToast('地址添加成功')
-    showAddressForm.value = false
-    await loadAddresses()
-    // 选中新添加的地址
-    if (data.id) {
-      selectedAddressId.value = data.id
-    } else if (addresses.value.length > 0) {
-      selectedAddressId.value = addresses.value[addresses.value.length - 1].id
-    }
-  } catch (e) {
-    showToast(e instanceof Error ? e.message : '添加地址失败', 'error')
-  } finally {
-    addressFormLoading.value = false
-  }
-}
-
-function formatAddress(addr: Address): string {
-  return `${addr.province}${addr.city}${addr.district}${addr.detail}`
-}
-
-async function confirmOrder() {
-  if (!selectedAddressId.value) {
-    showToast('请选择收货地址', 'error')
-    return
-  }
-  checkoutLoading.value = true
-  try {
-    const response = await fetch(`${API_BASE}/api/user/orders`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        address_id: selectedAddressId.value,
-        pay_method: payMethod.value,
-        remark: remark.value,
-      }),
-    })
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new Error(err.message || `HTTP ${response.status}`)
-    }
-    showToast('下单成功！')
-    checkoutVisible.value = false
-    // 切换到订单标签
-    setTimeout(() => {
-      switchToOrdersTab()
-    }, 800)
-  } catch (e) {
-    showToast(e instanceof Error ? e.message : '下单失败', 'error')
-  } finally {
-    checkoutLoading.value = false
-  }
 }
 
 function closeCheckout() {
   checkoutVisible.value = false
-  showAddressForm.value = false
+}
+
+function onCheckoutSuccess() {
+  checkoutVisible.value = false
+  showToast('下单成功！')
+  loadCart()
+  // 切换到订单标签
+  setTimeout(() => {
+    switchToOrdersTab()
+  }, 800)
 }
 
 // ---------- 格式化 ----------
@@ -420,153 +307,13 @@ onMounted(() => {
     </div>
 
     <!-- 结算弹窗 -->
-    <transition name="modal">
-      <div v-if="checkoutVisible" class="sc-modal-overlay" @click.self="closeCheckout">
-        <div class="sc-modal">
-          <div class="sc-modal__header">
-            <h2>确认订单</h2>
-            <button class="sc-modal__close" @click="closeCheckout">×</button>
-          </div>
-
-          <div class="sc-modal__body">
-            <!-- 收货地址 -->
-            <div class="sc-section">
-              <div class="sc-section__title">收货地址</div>
-
-              <div v-if="addresses.length > 0 && !showAddressForm" class="sc-addr-list">
-                <label
-                  v-for="addr in addresses"
-                  :key="addr.id"
-                  :class="['sc-addr', { active: selectedAddressId === addr.id }]"
-                >
-                  <input
-                    type="radio"
-                    :value="addr.id"
-                    v-model="selectedAddressId"
-                  />
-                  <div class="sc-addr__info">
-                    <div class="sc-addr__head">
-                      <span class="sc-addr__name">{{ addr.recipient }}</span>
-                      <span class="sc-addr__phone">{{ addr.phone }}</span>
-                      <span v-if="addr.is_default" class="sc-addr__default">默认</span>
-                    </div>
-                    <p class="sc-addr__detail">{{ formatAddress(addr) }}</p>
-                  </div>
-                </label>
-              </div>
-
-              <!-- 新增地址表单 -->
-              <div v-if="showAddressForm" class="sc-addr-form">
-                <div class="sc-addr-form__row">
-                  <div class="sc-addr-form__field">
-                    <label>收货人</label>
-                    <input v-model="addressForm.recipient" type="text" placeholder="请输入收货人姓名" />
-                  </div>
-                  <div class="sc-addr-form__field">
-                    <label>手机号</label>
-                    <input v-model="addressForm.phone" type="text" placeholder="请输入手机号" />
-                  </div>
-                </div>
-                <div class="sc-addr-form__row">
-                  <div class="sc-addr-form__field">
-                    <label>省份</label>
-                    <input v-model="addressForm.province" type="text" placeholder="省份" />
-                  </div>
-                  <div class="sc-addr-form__field">
-                    <label>城市</label>
-                    <input v-model="addressForm.city" type="text" placeholder="城市" />
-                  </div>
-                  <div class="sc-addr-form__field">
-                    <label>区/县</label>
-                    <input v-model="addressForm.district" type="text" placeholder="区/县" />
-                  </div>
-                </div>
-                <div class="sc-addr-form__field">
-                  <label>详细地址</label>
-                  <input v-model="addressForm.detail" type="text" placeholder="请输入详细地址" />
-                </div>
-                <div class="sc-addr-form__actions">
-                  <button class="sc-btn sc-btn--ghost" @click="toggleAddressForm">取消</button>
-                  <button class="sc-btn sc-btn--primary" :disabled="addressFormLoading" @click="saveAddress">
-                    {{ addressFormLoading ? '保存中...' : '保存地址' }}
-                  </button>
-                </div>
-              </div>
-
-              <button
-                v-if="!showAddressForm"
-                class="sc-addr__add"
-                @click="toggleAddressForm"
-              >
-                + 新增收货地址
-              </button>
-            </div>
-
-            <!-- 支付方式 -->
-            <div class="sc-section">
-              <div class="sc-section__title">支付方式</div>
-              <div class="sc-pay">
-                <label
-                  :class="['sc-pay__option', { active: payMethod === 'wechat' }]"
-                >
-                  <input type="radio" value="wechat" v-model="payMethod" />
-                  <span class="sc-pay__icon sc-pay__icon--wechat">微</span>
-                  <span>微信支付</span>
-                </label>
-                <label
-                  :class="['sc-pay__option', { active: payMethod === 'alipay' }]"
-                >
-                  <input type="radio" value="alipay" v-model="payMethod" />
-                  <span class="sc-pay__icon sc-pay__icon--alipay">支</span>
-                  <span>支付宝</span>
-                </label>
-              </div>
-            </div>
-
-            <!-- 备注 -->
-            <div class="sc-section">
-              <div class="sc-section__title">订单备注</div>
-              <textarea
-                v-model="remark"
-                class="sc-remark"
-                placeholder="选填，给商家留言（如配送时间、发票信息等）"
-                rows="3"
-              ></textarea>
-            </div>
-
-            <!-- 订单摘要 -->
-            <div class="sc-section">
-              <div class="sc-section__title">订单摘要</div>
-              <div class="sc-summary">
-                <div class="sc-summary__row">
-                  <span>商品数量</span>
-                  <span>{{ selectedCount }} 件</span>
-                </div>
-                <div class="sc-summary__row">
-                  <span>商品总额</span>
-                  <span>¥{{ formatPrice(totalAmount) }}</span>
-                </div>
-                <div class="sc-summary__row sc-summary__row--total">
-                  <span>应付金额</span>
-                  <span class="sc-summary__amount">¥{{ formatPrice(totalAmount) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="sc-modal__footer">
-            <button class="sc-btn sc-btn--ghost" @click="closeCheckout">取消</button>
-            <button
-              class="sc-btn sc-btn--primary sc-btn--lg"
-              :disabled="checkoutLoading || !selectedAddressId"
-              @click="confirmOrder"
-            >
-              {{ checkoutLoading ? '提交中...' : '确认下单' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
+    <CheckoutModal
+      :visible="checkoutVisible"
+      :items="checkoutItems"
+      mode="cart"
+      @close="closeCheckout"
+      @success="onCheckoutSuccess"
+    />
   </div>
 </template>
 

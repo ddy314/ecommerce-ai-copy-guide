@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, inject, watch, type Ref } from 'vue'
+import CheckoutModal, { type CheckoutItem } from './CheckoutModal.vue'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // ---------- 类型定义 ----------
 interface Product {
@@ -66,6 +67,11 @@ const detailProduct = ref<ProductDetail | null>(null)
 const detailQuantity = ref(1)
 const isFavorited = ref(false)
 const activeImageUrl = ref<string>('')
+
+// 立即购买结算弹窗
+const checkoutVisible = ref(false)
+const checkoutItems = ref<CheckoutItem[]>([])
+
 
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -256,14 +262,18 @@ async function openDetailById(productId: number) {
   }
 }
 
-// 监听 AI 聊天的商品跳转
-watch(targetProductId, (newId) => {
-  if (newId) {
-    openDetailById(newId)
-    // 消费后重置，避免重复触发
-    targetProductId.value = null
-  }
-})
+// 监听外部跳转商品详情（收藏 / 浏览记录 / AI 聊天）
+watch(
+  targetProductId,
+  (newId) => {
+    if (newId) {
+      openDetailById(newId)
+      // 消费后重置，避免重复触发
+      targetProductId.value = null
+    }
+  },
+  { immediate: true },
+)
 
 // ---------- 加入购物车 ----------
 async function addToCart(productId: number, quantity: number = 1) {
@@ -296,9 +306,30 @@ function handleAddToCartFromDetail() {
 // ---------- 立即购买 ----------
 function handleBuyNow() {
   if (!detailProduct.value) return
-  addToCart(detailProduct.value.id, detailQuantity.value)
+  const product = detailProduct.value
+  checkoutItems.value = [
+    {
+      product_id: product.id,
+      product_name: product.name,
+      product_image: product.image_url || null,
+      product_price: product.price,
+      product_category: product.category || null,
+      quantity: detailQuantity.value,
+    },
+  ]
+  checkoutVisible.value = true
+}
+
+function closeCheckout() {
+  checkoutVisible.value = false
+}
+
+function onCheckoutSuccess() {
+  checkoutVisible.value = false
   closeDetail()
-  navigate('cart')
+  showToast('下单成功！')
+  // 跳转个人中心，用户可在「我的订单」中查看
+  navigate('profile')
 }
 
 // ---------- 询问客服 ----------
@@ -686,6 +717,15 @@ onMounted(() => {
         </div>
       </div>
     </transition>
+
+    <!-- 立即购买结算弹窗 -->
+    <CheckoutModal
+      :visible="checkoutVisible"
+      :items="checkoutItems"
+      mode="buy-now"
+      @close="closeCheckout"
+      @success="onCheckoutSuccess"
+    />
   </div>
 </template>
 
