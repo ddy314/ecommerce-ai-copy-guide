@@ -6,8 +6,10 @@ import {
   PaperAirplaneIcon,
   ChatBubbleBottomCenterTextIcon,
   InboxIcon,
+  SparklesIcon,
 } from '@heroicons/vue/24/outline'
 import FormInput from '../ui/FormInput.vue'
+import { resolveAvatarUrl } from '../../utils/avatar'
 
 interface Thread {
   user_id: number
@@ -35,7 +37,7 @@ interface CSMessage {
   product_display_id?: string
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const threads = ref<Thread[]>([])
 const messages = ref<CSMessage[]>([])
@@ -55,6 +57,27 @@ const activeProductName = computed(() => {
   const msg = messages.value.find((m) => m.product_name)
   return msg ? msg.product_name : ''
 })
+
+const merchantAvatar = computed(() => {
+  const stored = localStorage.getItem('userInfo')
+  if (!stored) return ''
+  try {
+    const info = JSON.parse(stored)
+    return resolveAvatarUrl(info.avatar)
+  } catch {
+    return ''
+  }
+})
+
+function isSelfMessage(role: string): boolean {
+  return role === 'merchant' || role === 'ai'
+}
+
+function messageAvatar(msg: CSMessage): string {
+  if (msg.sender_role === 'merchant') return merchantAvatar.value
+  if (msg.sender_role === 'ai') return ''
+  return resolveAvatarUrl(msg.user_avatar_url)
+}
 
 function authHeaders(): HeadersInit {
   const token = localStorage.getItem('token')
@@ -264,41 +287,59 @@ onUnmounted(() => {
           <div
             v-for="(msg, idx) in messages"
             :key="msg.id || idx"
-            :class="msg.sender_role === 'merchant' ? 'text-right' : 'text-left'"
+            :class="isSelfMessage(msg.sender_role) ? 'text-right' : 'text-left'"
             class="fade-in-up"
           >
             <div
               class="flex items-end space-x-2"
-              :class="msg.sender_role === 'merchant' ? 'flex-row-reverse space-x-reverse' : ''"
+              :class="isSelfMessage(msg.sender_role) ? 'flex-row-reverse space-x-reverse' : ''"
             >
+              <!-- 头像：商家使用真实头像，AI 使用图标，用户使用真实头像或默认 -->
+              <img
+                v-if="messageAvatar(msg)"
+                :src="messageAvatar(msg)"
+                class="w-9 h-9 rounded-full object-cover border border-primary-light flex-shrink-0"
+                alt="avatar"
+              />
               <div
-                class="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                v-else
+                class="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
                 :class="{
                   'bg-gradient-to-br from-primary to-primary-dark': msg.sender_role === 'merchant',
                   'bg-gradient-to-br from-accent-blue to-primary': msg.sender_role === 'user',
-                  'bg-gradient-to-br from-primary-light to-accent-blue': msg.sender_role === 'ai',
+                  'bg-gradient-to-br from-green-400 to-emerald-500': msg.sender_role === 'ai',
                 }"
               >
-                {{ senderLabel(msg.sender_role) }}
+                <SparklesIcon v-if="msg.sender_role === 'ai'" class="w-4 h-4" />
+                <span v-else class="text-xs font-bold">{{ senderLabel(msg.sender_role) }}</span>
               </div>
-              <div
-                v-if="msg.sender_role === 'ai'"
-                class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] leading-relaxed shadow-sm bg-primary-light/40 text-gray-800 border border-primary-light/60 rounded-bl-sm"
-                v-html="renderMarkdown(msg.content)"
-              ></div>
-              <div
-                v-else
-                class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] whitespace-pre-wrap leading-relaxed shadow-sm"
-                :class="msg.sender_role === 'merchant'
-                  ? 'bg-gradient-to-r from-primary to-primary-dark text-white rounded-br-sm'
-                  : 'bg-white text-gray-800 border border-primary-light/50 rounded-bl-sm'"
-              >
-                {{ msg.content }}
+
+              <div class="max-w-[78%]">
+                <div
+                  v-if="msg.sender_role === 'ai'"
+                  class="text-xs text-green-600 mb-1 text-left"
+                >
+                  智能客服
+                </div>
+                <div
+                  v-if="msg.sender_role === 'ai'"
+                  class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-full leading-relaxed shadow-sm bg-green-50 text-gray-800 border border-green-100 rounded-bl-sm text-left"
+                  v-html="renderMarkdown(msg.content)"
+                ></div>
+                <div
+                  v-else
+                  class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-full whitespace-pre-wrap leading-relaxed shadow-sm text-left"
+                  :class="msg.sender_role === 'merchant'
+                    ? 'bg-gradient-to-r from-primary to-primary-dark text-white rounded-br-sm'
+                    : 'bg-white text-gray-800 border border-primary-light/50 rounded-bl-sm'"
+                >
+                  {{ msg.content }}
+                </div>
               </div>
             </div>
             <p
               class="text-xs text-gray-400 mt-1"
-              :class="msg.sender_role === 'merchant' ? 'pr-11' : 'pl-11'"
+              :class="isSelfMessage(msg.sender_role) ? 'pr-11' : 'pl-11'"
             >
               {{ formatTime(msg.created_at) }}
             </p>
