@@ -1,0 +1,12 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.18, nodesep=0.36, ranksep=0.52, splines=ortho];
+  node [shape=box, style="rounded,filled", fontname="Noto Sans CJK SC", fontsize=12, color="#94A3B8", fillcolor="#FFFFFF", fontcolor="#17324D", margin="0.16,0.10"];
+  edge [color="#64748B", penwidth=1.5, arrowsize=0.72];
+  compose [label="Docker Compose\n装载环境变量", fillcolor="#DBEAFE", color="#2563EB"];
+  infra [label="PostgreSQL + Redis\n健康检查", fillcolor="#D1FAE5", color="#0F766E"];
+  migration [label="alembic upgrade head", fillcolor="#FEF3C7", color="#D97706"];
+  gunicorn [label="Gunicorn\n1 worker × 4 threads"];
+  nginx [label="Nginx :8081\n静态站点 + /api 代理", fillcolor="#E0F2FE", color="#0891B2"];
+  browser [label="浏览器\n同源访问", fillcolor="#DBEAFE", color="#2563EB"];
+  compose -> infra -> migration -> gunicorn -> nginx -> browser;
+}

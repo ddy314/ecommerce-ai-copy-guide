@@ -1,0 +1,16 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.18, nodesep=0.34, ranksep=0.50, splines=ortho];
+  node [shape=box, style="rounded,filled", fontname="Noto Sans CJK SC", fontsize=12, color="#94A3B8", fillcolor="#FFFFFF", fontcolor="#17324D", margin="0.16,0.10"];
+  edge [color="#64748B", penwidth=1.5, arrowsize=0.72];
+  boot [label="App.vue\n恢复本地会话", fillcolor="#DBEAFE", color="#2563EB"];
+  login [label="Login\n统一认证入口", fillcolor="#FEF3C7", color="#D97706"];
+  user [label="UserLayout\n用户业务页面", fillcolor="#E0F2FE", color="#0891B2"];
+  merchant [label="MerchantLayout\n商家业务页面", fillcolor="#D1FAE5", color="#0F766E"];
+  async [label="defineAsyncComponent\n按角色延迟加载"];
+  api [label="api.ts\n统一 JSON 请求与错误处理", fillcolor="#DBEAFE", color="#2563EB"];
+  boot -> login;
+  boot -> user;
+  boot -> merchant;
+  user -> async -> api;
+  merchant -> async;
+}

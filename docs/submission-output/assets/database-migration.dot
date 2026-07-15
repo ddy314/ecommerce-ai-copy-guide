@@ -1,0 +1,14 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.18, nodesep=0.36, ranksep=0.52, splines=ortho];
+  node [shape=box, style="rounded,filled", fontname="Noto Sans CJK SC", fontsize=12, color="#94A3B8", fillcolor="#FFFFFF", fontcolor="#17324D", margin="0.16,0.10"];
+  edge [color="#64748B", penwidth=1.5, arrowsize=0.72];
+  env [label="DATABASE_URL", fillcolor="#DBEAFE", color="#2563EB"];
+  local [label="空值\ninstance/ecommerce_ai.db", shape=cylinder, fillcolor="#E0F2FE", color="#0891B2"];
+  pg [label="postgresql://\n规范化 psycopg 3", shape=cylinder, fillcolor="#D1FAE5", color="#0F766E"];
+  migration [label="Alembic\nupgrade head", fillcolor="#FEF3C7", color="#D97706"];
+  app [label="SQLAlchemy 2\nEngine + Session"];
+  env -> local [label="未设置", fontname="Noto Sans CJK SC", fontsize=9];
+  env -> pg [label="已设置", fontname="Noto Sans CJK SC", fontsize=9];
+  pg -> migration -> app;
+  local -> app;
+}
