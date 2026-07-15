@@ -773,6 +773,9 @@ def assignments_xlsx() -> Path:
 
     summary = wb.create_sheet("模块责任矩阵")
     summary.sheet_view.showGridLines = False
+    for row in summary.iter_rows(min_row=1, max_row=16, min_col=1, max_col=7):
+        for cell in row:
+            cell.fill = PatternFill("solid", fgColor=WHITE)
     summary.merge_cells("A1:G1")
     summary["A1"] = "模块责任矩阵（R=主责，C=协作，V=验证）"
     summary["A1"].font = Font(name="Microsoft YaHei", size=15, bold=True, color=WHITE)
@@ -810,6 +813,7 @@ def assignments_xlsx() -> Path:
     summary.sheet_properties.pageSetUpPr.fitToPage = True
     summary.page_setup.fitToWidth = 1
     summary.page_setup.orientation = "landscape"
+    summary.print_area = "A1:G12"
     path = OUT / "项目组成员分工-本项目.xlsx"
     wb.save(path)
     return path

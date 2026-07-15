@@ -32,7 +32,7 @@ const menu = [
 </script>
 
 <template>
-  <LayoutHeader class="!sticky !top-0 !z-50 !flex !h-16 !items-center !border-b !border-slate-100 !px-4 shadow-sm sm:!px-6">
+  <LayoutHeader class="!sticky !top-0 !z-50 !flex !h-16 !items-center !border-b !border-slate-100 !bg-white !px-4 shadow-sm sm:!px-6">
     <button class="mr-5 flex shrink-0 items-center gap-2 text-lg font-bold text-violet-700" @click="emit('select-page', 'home')">
       <span class="grid h-9 w-9 place-items-center rounded-xl bg-violet-600 text-white"><RobotOutlined /></span>
       <span class="hidden sm:inline">AI 电商助手</span>

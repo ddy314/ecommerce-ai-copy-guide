@@ -218,8 +218,9 @@ async function handleResetPassword() {
       :transition="{ duration: 17, repeat: Infinity, ease: 'easeInOut' }"
     />
 
-    <Row :gutter="[32, 32]" align="middle" class="relative z-10 mx-auto min-h-[calc(100vh-4rem)] max-w-7xl">
-      <Col :xs="24" :lg="13">
+    <div class="relative z-10 mx-auto w-full max-w-7xl">
+      <Row :gutter="[32, 32]" align="middle" class="min-h-[calc(100vh-4rem)]">
+        <Col :xs="24" :lg="13">
         <motion.section
           :initial="pageMotion.initial"
           :animate="pageMotion.animate"
@@ -257,9 +258,9 @@ async function handleResetPassword() {
             </motion.div>
           </div>
         </motion.section>
-      </Col>
+        </Col>
 
-      <Col :xs="24" :lg="11">
+        <Col :xs="24" :lg="11">
         <motion.div
           :initial="{ opacity: 0, x: 28 }"
           :animate="{ opacity: 1, x: 0 }"
@@ -350,7 +351,8 @@ async function handleResetPassword() {
             </AnimatePresence>
           </Card>
         </motion.div>
-      </Col>
-    </Row>
+        </Col>
+      </Row>
+    </div>
   </main>
 </template>
