@@ -1,26 +1,31 @@
-"""Authentication adapter backed by Werkzeug and Flask-JWT-Extended."""
+"""认证服务 - JWT Token + 密码哈希"""
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import os
+import time
 import logging
-
-from flask_jwt_extended import create_access_token, decode_token, get_jwt, verify_jwt_in_request
-from werkzeug.security import check_password_hash, generate_password_hash
+import secrets
 
 logger = logging.getLogger(__name__)
 
+JWT_SECRET = os.getenv("JWT_SECRET", "ecommerce-ai-secret-key-2026")
+JWT_EXPIRE_HOURS = 24
+
+
 def hash_password(password: str) -> str:
-    """Hash new passwords with Werkzeug's maintained password API."""
-    return generate_password_hash(password, method="scrypt")
+    """密码哈希 - 使用 salt + sha256"""
+    salt = secrets.token_hex(16)
+    hashed = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+    return f"{salt}${hashed}"
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verify current hashes while retaining compatibility with legacy salt hashes."""
-    if password_hash.startswith(("scrypt:", "pbkdf2:")):
-        return check_password_hash(password_hash, password)
+    """验证密码"""
     try:
-        salt, stored_hash = password_hash.split("$", 1)
+        salt, stored_hash = password_hash.split("$")
         computed = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
         return hmac.compare_digest(computed, stored_hash)
     except (ValueError, AttributeError):
@@ -28,40 +33,64 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_token(user_id: int, username: str, role: str) -> str:
-    """Create a standards-compliant signed JWT with application claims."""
-    return create_access_token(
-        identity=str(user_id),
-        additional_claims={"user_id": user_id, "username": username, "role": role},
-    )
+    """创建 JWT Token (简化版)"""
+    payload = {
+        "user_id": user_id,
+        "username": username,
+        "role": role,
+        "exp": int(time.time()) + JWT_EXPIRE_HOURS * 3600,
+        "iat": int(time.time()),
+    }
+    payload_json = json.dumps(payload, separators=(",", ":"))
+    payload_b64 = _base64_encode(payload_json)
+    signature = _sign(f"{payload_b64}")
+    return f"{payload_b64}.{signature}"
 
 
 def verify_token(token: str) -> dict | None:
-    """Decode a JWT through Flask-JWT-Extended."""
+    """验证 Token，返回 payload 或 None"""
     try:
-        payload = decode_token(token)
-        return {
-            "user_id": int(payload["sub"]),
-            "username": payload.get("username", ""),
-            "role": payload.get("role", "user"),
-        }
+        parts = token.split(".")
+        if len(parts) != 2:
+            return None
+        payload_b64, signature = parts
+        expected_sig = _sign(payload_b64)
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+        payload_json = _base64_decode(payload_b64)
+        payload = json.loads(payload_json)
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
     except Exception as e:
         logger.debug(f"Token 验证失败: {e}")
         return None
 
+
+def _base64_encode(data: str) -> str:
+    import base64
+    return base64.urlsafe_b64encode(data.encode()).decode().rstrip("=")
+
+
+def _base64_decode(data: str) -> str:
+    import base64
+    padding = 4 - len(data) % 4
+    if padding != 4:
+        data += "=" * padding
+    return base64.urlsafe_b64decode(data.encode()).decode()
+
+
+def _sign(data: str) -> str:
+    return hmac.new(JWT_SECRET.encode(), data.encode(), hashlib.sha256).hexdigest()
+
+
 def get_user_from_request(request) -> dict | None:
-    """Verify the bearer token and expose the existing payload shape to routes."""
-    del request
-    try:
-        verify_jwt_in_request()
-        payload = get_jwt()
-        return {
-            "user_id": int(payload["sub"]),
-            "username": payload.get("username", ""),
-            "role": payload.get("role", "user"),
-        }
-    except Exception as exc:
-        logger.debug("Token 验证失败: %s", exc)
-        return None
+    """从 Flask request 中提取用户信息"""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        return verify_token(token)
+    return None
 
 
 def require_auth(request) -> tuple[dict | None, dict | None]:
