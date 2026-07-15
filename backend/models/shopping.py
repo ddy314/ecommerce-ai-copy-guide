@@ -46,6 +46,7 @@ class Order(Base):
     # 物流与售后
     tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="发货快递单号")
     return_tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="退货快递单号")
+    exchange_tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="换货新快递单号")
     return_status: Mapped[str] = mapped_column(String(20), nullable=True, comment="售后状态: none/returning/refunded/exchanged")
     return_reason: Mapped[str] = mapped_column(String(500), nullable=True, comment="退换货原因")
     return_applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
@@ -72,6 +73,7 @@ class Order(Base):
             "remark": self.remark,
             "tracking_no": self.tracking_no,
             "return_tracking_no": self.return_tracking_no,
+            "exchange_tracking_no": self.exchange_tracking_no,
             "return_status": self.return_status,
             "return_reason": self.return_reason,
             "return_applied_at": self.return_applied_at.isoformat() if self.return_applied_at else None,

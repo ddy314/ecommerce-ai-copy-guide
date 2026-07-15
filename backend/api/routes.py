@@ -23,6 +23,8 @@ from backend.schemas.requests import (
 )
 from backend.services.ai_provider import get_ai_provider
 from backend.database import get_db_context
+from backend.models.product import Product
+from backend.models.review import Review
 from backend.models.generation_task import GenerationTask
 from backend.models.recommendation_log import RecommendationLog
 from backend.cache import CacheService
