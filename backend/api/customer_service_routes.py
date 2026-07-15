@@ -183,7 +183,7 @@ def merchant_threads():
                     .where(
                         CustomerServiceMessage.user_id == msg.user_id,
                         CustomerServiceMessage.sender_role == "user",
-                        CustomerServiceMessage.is_read.is_(False),
+                        CustomerServiceMessage.is_read == False,
                     )
                 ).scalar() or 0
                 result.append({
@@ -330,6 +330,26 @@ def mark_read(message_id: int):
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 
+@cs_bp.get("/cs/merchant/profile")
+def merchant_profile():
+    """获取商家信息（用于用户端客服展示商家头像）"""
+    user_payload, error = require_auth(request)
+    if error:
+        return jsonify(error), 401
+
+    try:
+        with SessionLocal() as db:
+            merchant = db.execute(
+                select(User).where(User.role == "merchant").order_by(User.id)
+            ).scalars().first()
+            if not merchant:
+                return jsonify({"error": "not_found", "message": "暂无商家信息"}), 404
+            return jsonify({"merchant": merchant.to_dict()})
+    except Exception as e:
+        logger.error(f"获取商家信息失败: {e}", exc_info=True)
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+
 @cs_bp.get("/cs/merchant/unread-count")
 def merchant_unread_count():
     """商家未读用户消息数"""
@@ -343,7 +363,7 @@ def merchant_unread_count():
                 select(func.count(CustomerServiceMessage.id))
                 .where(
                     CustomerServiceMessage.sender_role == "user",
-                    CustomerServiceMessage.is_read.is_(False),
+                    CustomerServiceMessage.is_read == False,
                 )
             ).scalar() or 0
 
