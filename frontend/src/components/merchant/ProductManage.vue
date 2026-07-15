@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import {
+  CubeIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  PencilIcon,
+  TrashIcon,
+  PhotoIcon,
+  VideoCameraIcon,
+} from '@heroicons/vue/24/outline'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -97,6 +106,10 @@ const imageUploading = ref(false)
 const videoUploading = ref(false)
 
 const modalTitle = computed(() => (editingId.value === null ? '新增商品' : '编辑商品'))
+
+const publishedCount = computed(
+  () => products.value.filter((p) => p.is_published !== false).length,
+)
 
 const pageNumbers = computed(() => {
   const pages: number[] = []
@@ -408,126 +421,208 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="pm-page">
-    <!-- 顶部操作区 -->
-    <div class="pm-toolbar">
-      <div class="pm-search">
-        <input
-          v-model="keyword"
-          type="text"
-          class="pm-input"
-          placeholder="搜索商品名称..."
-          @keyup.enter="searchProducts"
-        />
-        <button class="pm-btn pm-btn--primary" @click="searchProducts">搜索</button>
+  <div class="space-y-5 animate-fade-in-up">
+    <!-- 顶部统计与操作 -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+          <CubeIcon class="w-6 h-6" />
+        </div>
+        <div>
+          <h3 class="text-lg font-bold text-gray-800">商品管理</h3>
+          <p class="text-xs text-gray-500">
+            共 <span class="font-semibold text-primary">{{ total }}</span> 件商品，已上架
+            <span class="font-semibold text-emerald-600">{{ publishedCount }}</span> 件
+          </p>
+        </div>
       </div>
-      <div class="pm-actions">
-        <button class="pm-btn pm-btn--primary" @click="openCreate">+ 新增商品</button>
-      </div>
+      <button
+        @click="openCreate"
+        class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-dark hover:-translate-y-0.5 transition-all shadow-card"
+      >
+        <PlusIcon class="w-4 h-4" />
+        新增商品
+      </button>
     </div>
 
-    <!-- 类目筛选 + 每页条数（同一行，分类在左，条数在右） -->
-    <div class="pm-tags-row">
-      <div class="pm-tags">
+    <!-- 搜索与筛选 -->
+    <div class="bg-white rounded-2xl border border-primary-light/50 shadow-card p-4">
+      <div class="flex flex-col md:flex-row gap-4">
+        <div class="relative flex-1 min-w-0">
+          <MagnifyingGlassIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <input
+            v-model="keyword"
+            type="text"
+            class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+            placeholder="搜索商品名称..."
+            @keyup.enter="searchProducts"
+          />
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-xs text-gray-400 whitespace-nowrap">每页</span>
+          <select
+            :value="pageSize"
+            @change="changePageSize(Number(($event.target as HTMLSelectElement).value))"
+            class="px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary outline-none bg-white"
+          >
+            <option :value="10">10</option>
+            <option :value="20">20</option>
+            <option :value="50">50</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mt-4">
         <button
-          :class="['pm-tag', { active: !selectedCategory }]"
+          :class="[
+            'px-4 py-1.5 rounded-full text-xs font-medium border transition-all',
+            !selectedCategory
+              ? 'bg-primary text-white border-primary'
+              : 'bg-white text-gray-600 border-gray-200 hover:border-primary hover:text-primary',
+          ]"
           @click="selectCategory('')"
         >
-          全部
+          全部类目
         </button>
         <button
           v-for="cat in categories"
           :key="cat"
-          :class="['pm-tag', { active: selectedCategory === cat }]"
+          :class="[
+            'px-4 py-1.5 rounded-full text-xs font-medium border transition-all',
+            selectedCategory === cat
+              ? 'bg-primary text-white border-primary'
+              : 'bg-white text-gray-600 border-gray-200 hover:border-primary hover:text-primary',
+          ]"
           @click="selectCategory(cat)"
         >
           {{ cat }}
         </button>
       </div>
-      <div class="pm-page-size">
-        <label>每页显示：</label>
-        <select :value="pageSize" @change="changePageSize(Number(($event.target as HTMLSelectElement).value))">
-          <option :value="10">10</option>
-          <option :value="20">20</option>
-          <option :value="50">50</option>
-        </select>
+    </div>
+
+    <!-- 错误提示 -->
+    <div
+      v-if="error"
+      class="rounded-xl px-4 py-3 text-sm font-medium bg-rose-50 text-rose-700 border border-rose-100"
+    >
+      {{ error }}
+    </div>
+
+    <!-- 加载中 -->
+    <div v-if="loading" class="flex flex-col items-center justify-center py-20 text-gray-400">
+      <div class="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3"></div>
+      <p>加载商品中...</p>
+    </div>
+
+    <!-- 商品卡片网格 -->
+    <div v-else-if="products.length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+      <div
+        v-for="product in products"
+        :key="product.id"
+        class="group bg-white rounded-2xl border border-primary-light/40 shadow-card hover:shadow-card-hover hover:-translate-y-1 transition-all duration-300 overflow-hidden"
+      >
+        <div class="relative aspect-[4/3] bg-gray-100 overflow-hidden">
+          <img
+            v-if="mainImageUrl(product)"
+            :src="mainImageUrl(product)"
+            :alt="product.name"
+            class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+            @error="(e: any) => (e.target.style.display = 'none')"
+          />
+          <div
+            v-else
+            class="w-full h-full flex flex-col items-center justify-center text-gray-300"
+          >
+            <PhotoIcon class="w-10 h-10 mb-1" />
+            <span class="text-xs">暂无图片</span>
+          </div>
+          <div
+            :class="[
+              'absolute top-3 left-3 px-2.5 py-1 rounded-lg text-xs font-semibold backdrop-blur-sm',
+              product.is_published !== false
+                ? 'bg-emerald-500/90 text-white'
+                : 'bg-gray-500/80 text-white',
+            ]"
+          >
+            {{ product.is_published !== false ? '已上架' : '已下架' }}
+          </div>
+          <div
+            v-if="product.videos && product.videos.length"
+            class="absolute bottom-3 right-3 w-8 h-8 rounded-full bg-black/50 flex items-center justify-center text-white"
+          >
+            <VideoCameraIcon class="w-4 h-4" />
+          </div>
+        </div>
+
+        <div class="p-4">
+          <div class="flex items-start justify-between gap-3 mb-2">
+            <h4 class="text-sm font-bold text-gray-800 line-clamp-2 flex-1" :title="product.name">
+              {{ product.name }}
+            </h4>
+            <span
+              v-if="product.category"
+              class="shrink-0 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-[11px] font-medium"
+            >
+              {{ product.category }}
+            </span>
+          </div>
+
+          <p v-if="product.spec" class="text-xs text-gray-500 mb-3 truncate">
+            {{ product.spec }}
+          </p>
+
+          <div class="flex items-end gap-2 mb-4">
+            <span class="text-lg font-bold text-primary">{{ formatPrice(product.price) }}</span>
+            <span
+              v-if="product.original_price && product.original_price !== product.price"
+              class="text-xs text-gray-400 line-through mb-1"
+            >
+              ¥{{ product.original_price.toFixed(2) }}
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between pt-3 border-t border-gray-100">
+            <span class="text-xs text-gray-400">来源：{{ sourceText(product.source) }}</span>
+            <div class="flex items-center gap-2">
+              <button
+                @click="openEdit(product)"
+                class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-primary bg-primary/5 hover:bg-primary hover:text-white transition-colors"
+              >
+                <PencilIcon class="w-3.5 h-3.5" />
+                编辑
+              </button>
+              <button
+                @click="askDelete(product)"
+                class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-rose-600 bg-rose-50 hover:bg-rose-500 hover:text-white transition-colors"
+              >
+                <TrashIcon class="w-3.5 h-3.5" />
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div v-if="error" class="pm-error">{{ error }}</div>
-
-    <!-- 加载中 -->
-    <div v-if="loading" class="pm-loading">
-      <div class="pm-spinner"></div>
-      <p>加载中...</p>
-    </div>
-
-    <!-- 商品表格 -->
-    <div v-else class="pm-table-wrap">
-      <table class="pm-table">
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>类目</th>
-            <th>价格</th>
-            <th>来源</th>
-            <th>状态</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="product in products" :key="product.id">
-            <td class="pm-cell-name">
-              <div class="pm-name-box">
-                <img
-                  v-if="mainImageUrl(product)"
-                  :src="mainImageUrl(product)"
-                  :alt="product.name"
-                  class="pm-thumb"
-                  @error="(e: any) => e.target.style.visibility = 'hidden'"
-                />
-                <div class="pm-name-text">
-                  <span class="pm-name" :title="product.name">{{ product.name }}</span>
-                  <span v-if="product.spec" class="pm-spec">{{ product.spec }}</span>
-                </div>
-              </div>
-            </td>
-            <td>
-              <span class="pm-cat-badge">{{ product.category || '-' }}</span>
-            </td>
-            <td>
-              <div class="pm-price-box">
-                <span class="pm-price">{{ formatPrice(product.price) }}</span>
-                <span
-                  v-if="product.original_price && product.original_price !== product.price"
-                  class="pm-origin-price"
-                >¥{{ product.original_price.toFixed(2) }}</span>
-              </div>
-            </td>
-            <td>{{ sourceText(product.source) }}</td>
-            <td>
-              <span :class="['pm-status', product.is_published !== false ? 'pm-status--on' : 'pm-status--off']">
-                {{ product.is_published !== false ? '已上架' : '已下架' }}
-              </span>
-            </td>
-            <td>
-              <div class="pm-ops">
-                <button class="pm-op pm-op--edit" @click="openEdit(product)">编辑</button>
-                <button class="pm-op pm-op--del" @click="askDelete(product)">删除</button>
-              </div>
-            </td>
-          </tr>
-          <tr v-if="products.length === 0">
-            <td colspan="6" class="pm-empty">暂无商品数据，点击「新增商品」添加</td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- 空状态 -->
+    <div
+      v-else
+      class="flex flex-col items-center justify-center py-20 text-gray-400 border border-dashed border-gray-200 rounded-2xl bg-white/50"
+    >
+      <CubeIcon class="w-12 h-12 mb-3 text-primary/30" />
+      <p class="text-sm">暂无商品数据</p>
+      <button
+        @click="openCreate"
+        class="mt-3 text-sm text-primary font-medium hover:underline"
+      >
+        点击新增商品
+      </button>
     </div>
 
     <!-- 分页 -->
-    <div v-if="!loading && totalPages > 1" class="pm-pagination">
+    <div v-if="!loading && totalPages > 1" class="flex items-center justify-center gap-2 pt-2">
       <button
-        class="pm-page-btn"
+        class="px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:border-primary hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         :disabled="currentPage === 1"
         @click="goToPage(currentPage - 1)"
       >
@@ -536,59 +631,117 @@ onMounted(() => {
       <button
         v-for="page in pageNumbers"
         :key="page"
-        :class="['pm-page-btn', { active: page === currentPage }]"
+        :class="[
+          'w-9 h-9 rounded-lg text-sm font-medium transition-colors',
+          page === currentPage
+            ? 'bg-primary text-white'
+            : 'border border-gray-200 text-gray-600 hover:border-primary hover:text-primary',
+        ]"
         @click="goToPage(page)"
       >
         {{ page }}
       </button>
       <button
-        class="pm-page-btn"
+        class="px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:border-primary hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         :disabled="currentPage === totalPages"
         @click="goToPage(currentPage + 1)"
       >
         下一页
       </button>
-      <span class="pm-page-info">第 {{ currentPage }} / {{ totalPages }} 页，共 {{ total }} 条</span>
+      <span class="text-xs text-gray-400 ml-2">
+        第 {{ currentPage }} / {{ totalPages }} 页，共 {{ total }} 条
+      </span>
     </div>
 
     <!-- 新增/编辑弹窗 -->
-    <div v-if="showModal" class="pm-modal-mask" @click.self="closeModal">
-      <div class="pm-modal">
-        <div class="pm-modal__head">
-          <h3>{{ modalTitle }}</h3>
-          <button class="pm-modal__close" @click="closeModal">×</button>
+    <div
+      v-if="showModal"
+      class="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in-up"
+      @click.self="closeModal"
+    >
+      <div class="bg-white rounded-2xl shadow-card w-full max-w-3xl max-h-[90vh] overflow-y-auto animate-modal-in">
+        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white z-10">
+          <h3 class="text-lg font-bold text-gray-800">{{ modalTitle }}</h3>
+          <button
+            @click="closeModal"
+            class="w-8 h-8 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex items-center justify-center transition-colors text-xl leading-none"
+          >
+            ×
+          </button>
         </div>
-        <div class="pm-modal__body">
-          <div v-if="formError" class="pm-error">{{ formError }}</div>
-          <div class="pm-form-grid">
-            <div class="pm-form-group">
-              <label>商品名称 <span class="pm-req">*</span></label>
-              <input v-model="form.name" type="text" placeholder="请输入商品名称" />
+
+        <div class="p-6 space-y-5">
+          <div
+            v-if="formError"
+            class="rounded-xl px-4 py-3 text-sm font-medium bg-rose-50 text-rose-700 border border-rose-100"
+          >
+            {{ formError }}
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold text-gray-600">
+                商品名称 <span class="text-rose-500">*</span>
+              </label>
+              <input
+                v-model="form.name"
+                type="text"
+                class="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+                placeholder="请输入商品名称"
+              />
             </div>
-            <div class="pm-form-group">
-              <label>类目</label>
-              <input v-model="form.category" type="text" placeholder="例如：办公椅" />
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold text-gray-600">类目</label>
+              <input
+                v-model="form.category"
+                type="text"
+                class="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+                placeholder="例如：办公椅"
+              />
             </div>
-            <div class="pm-form-group">
-              <label>价格（元）</label>
-              <input v-model="form.price" type="number" step="0.01" placeholder="0.00" />
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold text-gray-600">价格（元）</label>
+              <input
+                v-model="form.price"
+                type="number"
+                step="0.01"
+                class="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+                placeholder="0.00"
+              />
             </div>
-            <div class="pm-form-group">
-              <label>原价（元）</label>
-              <input v-model="form.original_price" type="number" step="0.01" placeholder="0.00" />
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold text-gray-600">原价（元）</label>
+              <input
+                v-model="form.original_price"
+                type="number"
+                step="0.01"
+                class="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+                placeholder="0.00"
+              />
             </div>
-            <div class="pm-form-group pm-form-group--full">
-              <label>规格</label>
-              <input v-model="form.spec" type="text" placeholder="例如：标准款 / 黑色" />
+            <div class="space-y-1.5 md:col-span-2">
+              <label class="text-xs font-semibold text-gray-600">规格</label>
+              <input
+                v-model="form.spec"
+                type="text"
+                class="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+                placeholder="例如：标准款 / 黑色"
+              />
             </div>
-            <div class="pm-form-group pm-form-group--full">
-              <label>卖点（每行一个）</label>
-              <textarea v-model="form.selling_points" rows="3" placeholder="护腰支撑&#10;透气坐垫"></textarea>
+            <div class="space-y-1.5 md:col-span-2">
+              <label class="text-xs font-semibold text-gray-600">卖点（每行一个）</label>
+              <textarea
+                v-model="form.selling_points"
+                rows="3"
+                class="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none resize-none"
+                placeholder="护腰支撑&#10;透气坐垫"
+              ></textarea>
             </div>
+
             <!-- 图片上传 -->
-            <div class="pm-form-group pm-form-group--full">
-              <label>商品图片</label>
-              <div class="pm-media-upload">
+            <div class="space-y-2 md:col-span-2">
+              <label class="text-xs font-semibold text-gray-600">商品图片</label>
+              <div>
                 <input
                   ref="imageInput"
                   type="file"
@@ -599,39 +752,63 @@ onMounted(() => {
                 />
                 <button
                   type="button"
-                  class="pm-upload-btn"
                   :disabled="imageUploading"
                   @click="($refs.imageInput as HTMLInputElement).click()"
+                  class="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-dashed border-primary text-primary text-sm font-medium hover:bg-primary/5 transition-colors disabled:opacity-60"
                 >
-                  {{ imageUploading ? '上传中...' : '+ 添加图片' }}
+                  <PhotoIcon class="w-4 h-4" />
+                  {{ imageUploading ? '上传中...' : '添加图片' }}
                 </button>
               </div>
-              <div class="pm-media-grid">
+              <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
                 <div
                   v-for="(url, idx) in form.image_urls"
                   :key="`img-${idx}`"
-                  class="pm-media-item"
+                  class="relative aspect-square rounded-xl overflow-hidden border border-gray-200 group"
                 >
-                  <img :src="url" alt="商品图片" />
-                  <button type="button" class="pm-media-del" @click="removeImage(url)">×</button>
+                  <img :src="url" class="w-full h-full object-cover" alt="商品图片" />
+                  <button
+                    type="button"
+                    @click="removeImage(url)"
+                    class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                  >
+                    ×
+                  </button>
                 </div>
                 <div
                   v-for="(item, idx) in pendingImages"
                   :key="`pimg-${idx}`"
-                  class="pm-media-item pm-media-item--pending"
+                  class="relative aspect-square rounded-xl overflow-hidden border border-gray-200"
                 >
-                  <img :src="item.url" alt="上传中" />
-                  <div v-if="item.uploading" class="pm-media-mask">上传中</div>
-                  <div v-else-if="item.error" class="pm-media-mask pm-media-mask--error" :title="item.error">失败</div>
-                  <button type="button" class="pm-media-del" @click="removeImage(item.url)">×</button>
+                  <img :src="item.url" class="w-full h-full object-cover opacity-70" alt="上传中" />
+                  <div
+                    v-if="item.uploading"
+                    class="absolute inset-0 flex items-center justify-center bg-black/30 text-white text-xs"
+                  >
+                    上传中
+                  </div>
+                  <div
+                    v-else-if="item.error"
+                    class="absolute inset-0 flex items-center justify-center bg-rose-500/80 text-white text-xs text-center px-1"
+                    :title="item.error"
+                  >
+                    失败
+                  </div>
+                  <button
+                    type="button"
+                    @click="removeImage(item.url)"
+                    class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/50 text-white flex items-center justify-center text-xs"
+                  >
+                    ×
+                  </button>
                 </div>
               </div>
             </div>
 
             <!-- 视频上传 -->
-            <div class="pm-form-group pm-form-group--full">
-              <label>商品视频</label>
-              <div class="pm-media-upload">
+            <div class="space-y-2 md:col-span-2">
+              <label class="text-xs font-semibold text-gray-600">商品视频</label>
+              <div>
                 <input
                   ref="videoInput"
                   type="file"
@@ -642,46 +819,95 @@ onMounted(() => {
                 />
                 <button
                   type="button"
-                  class="pm-upload-btn pm-upload-btn--video"
                   :disabled="videoUploading"
                   @click="($refs.videoInput as HTMLInputElement).click()"
+                  class="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-dashed border-accent-blue text-accent-blue text-sm font-medium hover:bg-accent-blue/10 transition-colors disabled:opacity-60"
                 >
-                  {{ videoUploading ? '上传中...' : '+ 添加视频' }}
+                  <VideoCameraIcon class="w-4 h-4" />
+                  {{ videoUploading ? '上传中...' : '添加视频' }}
                 </button>
               </div>
-              <div class="pm-media-grid">
+              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 <div
                   v-for="(url, idx) in form.videos"
                   :key="`vid-${idx}`"
-                  class="pm-media-item pm-media-item--video"
+                  class="relative rounded-xl overflow-hidden border border-gray-200 group"
                 >
-                  <video :src="url" controls preload="metadata"></video>
-                  <button type="button" class="pm-media-del" @click="removeVideo(url)">×</button>
+                  <video :src="url" controls preload="metadata" class="w-full aspect-video object-cover"></video>
+                  <button
+                    type="button"
+                    @click="removeVideo(url)"
+                    class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                  >
+                    ×
+                  </button>
                 </div>
                 <div
                   v-for="(item, idx) in pendingVideos"
                   :key="`pvid-${idx}`"
-                  class="pm-media-item pm-media-item--video pm-media-item--pending"
+                  class="relative rounded-xl overflow-hidden border border-gray-200"
                 >
-                  <video :src="item.url" preload="metadata"></video>
-                  <div v-if="item.uploading" class="pm-media-mask">上传中</div>
-                  <div v-else-if="item.error" class="pm-media-mask pm-media-mask--error" :title="item.error">失败</div>
-                  <button type="button" class="pm-media-del" @click="removeVideo(item.url)">×</button>
+                  <video :src="item.url" preload="metadata" class="w-full aspect-video object-cover opacity-70"></video>
+                  <div
+                    v-if="item.uploading"
+                    class="absolute inset-0 flex items-center justify-center bg-black/30 text-white text-xs"
+                  >
+                    上传中
+                  </div>
+                  <div
+                    v-else-if="item.error"
+                    class="absolute inset-0 flex items-center justify-center bg-rose-500/80 text-white text-xs text-center px-1"
+                    :title="item.error"
+                  >
+                    失败
+                  </div>
+                  <button
+                    type="button"
+                    @click="removeVideo(item.url)"
+                    class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/50 text-white flex items-center justify-center text-xs"
+                  >
+                    ×
+                  </button>
                 </div>
               </div>
             </div>
-            <div class="pm-form-group pm-form-group--full pm-publish-row">
-              <label class="pm-publish-label">
-                <input v-model="form.is_published" type="checkbox" />
-                <span class="pm-toggle" :class="{ 'pm-toggle--on': form.is_published }"></span>
-                <span>{{ form.is_published ? '立即上架' : '暂不上架' }}</span>
-              </label>
+
+            <!-- 上架开关 -->
+            <div class="md:col-span-2 flex items-center gap-3 pt-1">
+              <button
+                type="button"
+                @click="form.is_published = !form.is_published"
+                :class="[
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                  form.is_published ? 'bg-primary' : 'bg-gray-300',
+                ]"
+              >
+                <span
+                  :class="[
+                    'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                    form.is_published ? 'translate-x-6' : 'translate-x-1',
+                  ]"
+                ></span>
+              </button>
+              <span class="text-sm font-medium text-gray-700">
+                {{ form.is_published ? '立即上架' : '暂不上架' }}
+              </span>
             </div>
           </div>
         </div>
-        <div class="pm-modal__foot">
-          <button class="pm-btn pm-btn--ghost" @click="closeModal">取消</button>
-          <button class="pm-btn pm-btn--primary" :disabled="saving" @click="handleSubmit">
+
+        <div class="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 sticky bottom-0 bg-white z-10">
+          <button
+            @click="closeModal"
+            class="px-5 py-2 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleSubmit"
+            :disabled="saving || imageUploading || videoUploading"
+            class="px-5 py-2 rounded-xl text-sm font-medium bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-60"
+          >
             {{ saving ? '保存中...' : '保存' }}
           </button>
         </div>
@@ -689,20 +915,28 @@ onMounted(() => {
     </div>
 
     <!-- 删除确认弹窗 -->
-    <div v-if="deleteTarget" class="pm-modal-mask" @click.self="cancelDelete">
-      <div class="pm-modal pm-modal--sm">
-        <div class="pm-modal__head">
-          <h3>确认删除</h3>
-          <button class="pm-modal__close" @click="cancelDelete">×</button>
-        </div>
-        <div class="pm-modal__body">
-          <p class="pm-confirm-text">
-            确定要删除商品「<strong>{{ deleteTarget.name }}</strong>」吗？此操作不可恢复。
-          </p>
-        </div>
-        <div class="pm-modal__foot">
-          <button class="pm-btn pm-btn--ghost" @click="cancelDelete">取消</button>
-          <button class="pm-btn pm-btn--danger" :disabled="deleting" @click="confirmDelete">
+    <div
+      v-if="deleteTarget"
+      class="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in-up"
+      @click.self="cancelDelete"
+    >
+      <div class="bg-white rounded-2xl shadow-card w-full max-w-sm p-6 animate-modal-in">
+        <h3 class="text-lg font-bold text-gray-800 mb-2">确认删除</h3>
+        <p class="text-sm text-gray-500 leading-relaxed">
+          确定要删除商品 <strong class="text-gray-800">{{ deleteTarget.name }}</strong> 吗？此操作不可恢复。
+        </p>
+        <div class="flex justify-end gap-3 mt-6">
+          <button
+            @click="cancelDelete"
+            class="px-4 py-2 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="confirmDelete"
+            :disabled="deleting"
+            class="px-5 py-2 rounded-xl text-sm font-medium bg-rose-500 text-white hover:bg-rose-600 transition-colors disabled:opacity-60"
+          >
             {{ deleting ? '删除中...' : '确认删除' }}
           </button>
         </div>
@@ -710,713 +944,3 @@ onMounted(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-.pm-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* 工具栏 */
-.pm-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.pm-search {
-  display: flex;
-  gap: 10px;
-  flex: 1 1 360px;
-}
-
-.pm-input {
-  flex: 1;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  font-size: 14px;
-  font-family: inherit;
-  background: var(--panel);
-}
-
-.pm-input:focus {
-  outline: none;
-  border-color: var(--brand);
-}
-
-.pm-actions {
-  display: flex;
-  gap: 10px;
-}
-
-/* 按钮 */
-.pm-btn {
-  padding: 10px 18px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.pm-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.pm-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.pm-btn--primary {
-  background: var(--brand);
-  color: #fff;
-  border-color: var(--brand);
-}
-
-.pm-btn--primary:hover:not(:disabled) {
-  background: var(--brand-dark);
-  border-color: var(--brand-dark);
-}
-
-.pm-btn--ghost {
-  background: transparent;
-}
-
-.pm-btn--danger {
-  background: #e4393c;
-  color: #fff;
-  border-color: #e4393c;
-}
-
-.pm-btn--danger:hover:not(:disabled) {
-  background: #c5282b;
-  border-color: #c5282b;
-}
-
-/* 类目标签 */
-.pm-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.pm-tag {
-  padding: 6px 14px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.pm-tag:hover {
-  border-color: var(--brand);
-  color: var(--brand);
-}
-
-.pm-tag.active {
-  background: var(--brand);
-  color: #fff;
-  border-color: var(--brand);
-}
-
-/* 分类标签 + 每页条数 同一行 */
-.pm-tags-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.pm-tags-row .pm-tags {
-  margin-bottom: 0;
-  flex: 1;
-  min-width: 0;
-}
-
-.pm-page-size {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
-  flex-shrink: 0;
-}
-
-.pm-page-size select {
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-/* 加载 */
-.pm-loading {
-  text-align: center;
-  padding: 48px 0;
-  color: var(--muted);
-}
-
-.pm-spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid var(--line);
-  border-top-color: var(--brand);
-  border-radius: 50%;
-  animation: pm-spin 1s linear infinite;
-  margin: 0 auto 12px;
-}
-
-@keyframes pm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.pm-error {
-  background: #fee;
-  color: #c33;
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-size: 14px;
-}
-
-/* 表格 */
-.pm-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel);
-}
-
-.pm-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-  min-width: 720px;
-}
-
-.pm-table thead {
-  background: rgba(217, 95, 45, 0.06);
-}
-
-.pm-table th {
-  padding: 12px 16px;
-  text-align: left;
-  font-weight: 700;
-  color: var(--brand-dark);
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
-}
-
-.pm-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
-}
-
-.pm-table tbody tr:hover {
-  background: rgba(217, 95, 45, 0.03);
-}
-
-.pm-cell-name {
-  min-width: 220px;
-}
-
-.pm-name-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.pm-thumb {
-  width: 44px;
-  height: 44px;
-  flex: 0 0 auto;
-  border-radius: 8px;
-  object-fit: cover;
-  border: 1px solid var(--line);
-}
-
-.pm-name-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.pm-name {
-  font-weight: 600;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 240px;
-}
-
-.pm-spec {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.pm-cat-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  background: rgba(217, 95, 45, 0.1);
-  color: var(--brand-dark);
-}
-
-.pm-price-box {
-  display: flex;
-  flex-direction: column;
-}
-
-.pm-price {
-  color: #e4393c;
-  font-weight: 700;
-}
-
-.pm-origin-price {
-  font-size: 12px;
-  color: var(--muted);
-  text-decoration: line-through;
-}
-
-.pm-ops {
-  display: flex;
-  gap: 8px;
-}
-
-.pm-op {
-  padding: 4px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: transparent;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.pm-op--edit {
-  color: var(--brand);
-  border-color: rgba(217, 95, 45, 0.4);
-}
-
-.pm-op--edit:hover {
-  background: var(--brand);
-  color: #fff;
-}
-
-.pm-op--del {
-  color: #e4393c;
-  border-color: rgba(228, 57, 60, 0.4);
-}
-
-.pm-op--del:hover {
-  background: #e4393c;
-  color: #fff;
-}
-
-.pm-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.pm-status::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.pm-status--on {
-  background: rgba(31, 138, 91, 0.1);
-  color: #1f8a5b;
-}
-
-.pm-status--on::before {
-  background: #1f8a5b;
-}
-
-.pm-status--off {
-  background: rgba(136, 136, 136, 0.1);
-  color: var(--muted);
-}
-
-.pm-status--off::before {
-  background: var(--muted);
-}
-
-.pm-empty {
-  text-align: center;
-  color: var(--muted);
-  padding: 40px 0;
-}
-
-/* 分页 */
-.pm-pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.pm-page-btn {
-  padding: 7px 13px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--ink);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.pm-page-btn:hover:not(:disabled) {
-  border-color: var(--brand);
-  color: var(--brand);
-}
-
-.pm-page-btn.active {
-  background: var(--brand);
-  color: #fff;
-  border-color: var(--brand);
-}
-
-.pm-page-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.pm-page-info {
-  margin-left: 12px;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-/* 弹窗 */
-.pm-modal-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(33, 26, 20, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-}
-
-.pm-modal {
-  width: min(560px, 100%);
-  max-height: 90vh;
-  overflow-y: auto;
-  background: var(--panel);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-}
-
-.pm-modal--sm {
-  width: min(420px, 100%);
-}
-
-.pm-modal__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--line);
-}
-
-.pm-modal__head h3 {
-  margin: 0;
-  font-size: 18px;
-  color: var(--brand-dark);
-}
-
-.pm-modal__close {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  font-size: 22px;
-  line-height: 1;
-  color: var(--muted);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.pm-modal__close:hover {
-  background: rgba(217, 95, 45, 0.1);
-  color: var(--brand);
-}
-
-.pm-modal__body {
-  padding: 22px;
-  flex: 1;
-}
-
-.pm-confirm-text {
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.6;
-}
-
-.pm-modal__foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 16px 22px;
-  border-top: 1px solid var(--line);
-}
-
-/* 表单 */
-.pm-form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.pm-form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.pm-form-group--full {
-  grid-column: 1 / -1;
-}
-
-.pm-form-group label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.pm-req {
-  color: #e4393c;
-}
-
-.pm-form-group input,
-.pm-form-group textarea {
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  font-size: 14px;
-  font-family: inherit;
-  background: var(--panel);
-  color: var(--ink);
-}
-
-.pm-form-group input:focus,
-.pm-form-group textarea:focus {
-  outline: none;
-  border-color: var(--brand);
-}
-
-.pm-form-group textarea {
-  resize: vertical;
-  min-height: 72px;
-}
-
-.pm-publish-row {
-  display: flex;
-  align-items: center;
-}
-
-.pm-publish-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.pm-publish-label input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.pm-toggle {
-  width: 44px;
-  height: 24px;
-  border-radius: 999px;
-  background: var(--line);
-  position: relative;
-  transition: background 0.2s;
-  flex-shrink: 0;
-}
-
-.pm-toggle::after {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 2px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 0.2s;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-}
-
-.pm-toggle--on {
-  background: var(--brand);
-}
-
-.pm-toggle--on::after {
-  transform: translateX(20px);
-}
-
-/* 媒体上传 */
-.pm-media-upload {
-  margin-bottom: 10px;
-}
-
-.pm-upload-btn {
-  padding: 9px 16px;
-  border: 1px dashed var(--brand, #d95f2d);
-  border-radius: 10px;
-  background: rgba(217, 95, 45, 0.06);
-  color: var(--brand, #d95f2d);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.pm-upload-btn:hover:not(:disabled) {
-  background: rgba(217, 95, 45, 0.12);
-}
-
-.pm-upload-btn--video {
-  border-color: #1677ff;
-  background: rgba(22, 119, 255, 0.06);
-  color: #1677ff;
-}
-
-.pm-upload-btn--video:hover:not(:disabled) {
-  background: rgba(22, 119, 255, 0.12);
-}
-
-.pm-upload-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.pm-media-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: 10px;
-}
-
-.pm-media-item {
-  position: relative;
-  aspect-ratio: 1;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid var(--line, #e8e4df);
-  background: #f7f7f7;
-}
-
-.pm-media-item--video {
-  aspect-ratio: 16 / 10;
-}
-
-.pm-media-item img,
-.pm-media-item video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.pm-media-item--pending::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border: 2px dashed var(--brand, #d95f2d);
-  border-radius: 10px;
-  pointer-events: none;
-}
-
-.pm-media-mask {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.pm-media-mask--error {
-  background: rgba(196, 30, 30, 0.65);
-}
-
-.pm-media-del {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: background 0.2s;
-}
-
-.pm-media-del:hover {
-  background: rgba(228, 57, 60, 0.85);
-}
-
-.hidden {
-  display: none;
-}
-
-@media (max-width: 640px) {
-  .pm-form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .pm-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-}
-</style>

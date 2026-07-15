@@ -182,7 +182,22 @@ async function handleDelete() {
   }
 }
 
+function getCurrentUserId(): number | null {
+  const stored = localStorage.getItem('userInfo')
+  if (!stored) return null
+  try {
+    const info = JSON.parse(stored)
+    return info.id ?? null
+  } catch {
+    return null
+  }
+}
+
 function toggleActive(user: UserInfo) {
+  if (user.id === getCurrentUserId() && user.is_active) {
+    alert('不能禁用自己当前登录的账号')
+    return
+  }
   fetch(`${API_BASE}/api/merchant/users/${user.id}`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),

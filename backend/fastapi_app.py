@@ -15,7 +15,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, desc
-import uuid
 
 from backend.database import SessionLocal, init_db
 from backend.models.product import Product
@@ -23,6 +22,7 @@ from backend.models.review import Review
 from backend.models.user import User, UserAddress, UserFavorite, BrowseHistory
 from backend.models.shopping import CartItem, Order, OrderItem
 from backend.models.knowledge_base import KnowledgeEntry, QARecord
+from backend.utils.helpers import generate_order_no
 from backend.services.auth_service import (
     hash_password,
     verify_password,
@@ -577,7 +577,8 @@ def create_order(req: CreateOrderRequest, user: dict = Depends(get_current_user)
         if not order_items_data:
             raise HTTPException(status_code=400, detail="没有有效商品")
 
-        order_no = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:6].upper()}"
+        first_product_id = order_items_data[0]["product_id"]
+        order_no = generate_order_no(db, first_product_id)
         order = Order(order_no=order_no, user_id=user["user_id"], status="pending", total_amount=round(total_amount, 2), pay_method=req.pay_method, address_snapshot=json.dumps(address.to_dict(), ensure_ascii=False), items_snapshot=json.dumps(order_items_data, ensure_ascii=False), remark=req.remark)
         db.add(order)
         db.flush()

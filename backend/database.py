@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import logging
 from contextlib import contextmanager
+from datetime import datetime
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, event
@@ -107,6 +108,7 @@ def init_db() -> None:
     _add_display_id_columns()
     _add_product_media_columns()
     _add_order_logistics_columns()
+    _normalize_order_numbers()
 
 
 def _add_password_plain_column() -> None:
@@ -231,3 +233,69 @@ def _add_order_logistics_columns() -> None:
                 conn.commit()
     except Exception as e:
         logger.warning(f"添加订单物流字段失败: {e}")
+
+
+def _normalize_order_numbers() -> None:
+    """将数据库中不符合规范的订单编号统一为：YYYYMMDDHHMMSS<商品展示ID><5位序号>"""
+    import json
+    import re
+
+    from backend.models.shopping import Order
+    from backend.models.product import Product
+
+    try:
+        from sqlalchemy import inspect
+
+        inspector = inspect(engine)
+        if "orders" not in inspector.get_table_names():
+            return
+
+        valid_pattern = re.compile(r"^\d{14}\d{5}\d{5}$")
+
+        with SessionLocal() as db:
+            orders = db.query(Order).order_by(Order.id).all()
+            if not orders:
+                return
+
+            used_nos = set()
+            counters: dict[str, int] = {}
+            updated = 0
+
+            for order in orders:
+                if valid_pattern.match(order.order_no or ""):
+                    used_nos.add(order.order_no)
+                    continue
+
+                display_id = "00000"
+                try:
+                    items = json.loads(order.items_snapshot or "[]")
+                    if items and isinstance(items, list):
+                        first_pid = items[0].get("product_id")
+                        product = db.get(Product, first_pid) if first_pid else None
+                        display_id = (
+                            product.display_id
+                            if product and product.display_id
+                            else f"{int(first_pid):05d}"
+                        )
+                except Exception:
+                    pass
+
+                ts = order.created_at.strftime("%Y%m%d%H%M%S") if order.created_at else datetime.now().strftime("%Y%m%d%H%M%S")
+                base = f"{ts}{display_id}"
+                seq = counters.get(base, 1)
+                while True:
+                    new_no = f"{base}{seq:05d}"
+                    if new_no not in used_nos:
+                        break
+                    seq += 1
+
+                order.order_no = new_no
+                used_nos.add(new_no)
+                counters[base] = seq + 1
+                updated += 1
+
+            db.commit()
+            if updated:
+                logger.info(f"已规范化 {updated} 个订单编号")
+    except Exception as e:
+        logger.warning(f"规范化订单编号失败: {e}")

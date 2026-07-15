@@ -18,6 +18,7 @@ import UserManage from './components/merchant/UserManage.vue'
 import OrderManage from './components/merchant/OrderManage.vue'
 import RevenueDashboard from './components/merchant/RevenueDashboard.vue'
 import MerchantCustomerService from './components/merchant/MerchantCustomerService.vue'
+import MerchantProfile from './components/merchant/MerchantProfile.vue'
 
 // 应用视图状态：未登录 / 商家后台 / 用户前台
 type AppView = 'login' | 'merchant' | 'user'
@@ -74,6 +75,13 @@ function handleLogout() {
   userInfo.value = null
   currentView.value = 'login'
 }
+
+// 子页面更新用户信息后同步到顶部状态
+function handleUserInfoUpdate(payload: Record<string, unknown>) {
+  if (userInfo.value) {
+    userInfo.value = { ...userInfo.value, ...payload } as UserInfo
+  }
+}
 </script>
 
 <template>
@@ -116,6 +124,9 @@ function handleLogout() {
 
       <!-- 客服管理 -->
       <MerchantCustomerService v-else-if="page === 'customer-service'" />
+
+      <!-- 个人中心 -->
+      <MerchantProfile v-else-if="page === 'profile'" @update:user-info="handleUserInfoUpdate" />
 
       <!-- 占位 -->
       <div

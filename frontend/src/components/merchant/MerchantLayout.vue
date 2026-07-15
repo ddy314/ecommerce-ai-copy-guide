@@ -56,9 +56,12 @@ const menuItems: { key: MerchantPage; name: string; icon: any; desc: string }[] 
 
 const activePage = ref<MerchantPage>('dashboard')
 
-const activeMenu = computed(() =>
-  menuItems.find((m) => m.key === activePage.value),
-)
+const activeMenu = computed(() => {
+  if (activePage.value === 'profile') {
+    return { name: '个人中心', desc: '商家账号资料管理' }
+  }
+  return menuItems.find((m) => m.key === activePage.value)
+})
 
 function selectPage(key: string) {
   activePage.value = key as MerchantPage
