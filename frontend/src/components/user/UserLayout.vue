@@ -1,16 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, provide } from 'vue'
-import { Button, Card, Layout, LayoutContent } from 'ant-design-vue'
-import { motion } from 'motion-v'
+import { ref, computed, provide, onMounted, onUnmounted } from 'vue'
 import NavBar from '../common/NavBar.vue'
 import ChatWidget from '../common/ChatWidget.vue'
 import CustomerService from './CustomerService.vue'
 import {
-  CustomerServiceOutlined,
-  HomeOutlined,
-  ShopOutlined,
-  UserOutlined,
-} from '@ant-design/icons-vue'
+  HomeIcon,
+  ShoppingBagIcon,
+  UserCircleIcon,
+  ChatBubbleLeftRightIcon,
+} from '@heroicons/vue/24/outline'
 
 interface UserInfo {
   username: string
@@ -31,10 +29,10 @@ const emit = defineEmits<{
 type UserPage = 'home' | 'products' | 'profile' | 'customer-service'
 
 const menuItems: { key: UserPage; label: string; icon: any }[] = [
-  { key: 'home', label: '首页', icon: HomeOutlined },
-  { key: 'products', label: '商品浏览', icon: ShopOutlined },
-  { key: 'customer-service', label: '客服咨询', icon: CustomerServiceOutlined },
-  { key: 'profile', label: '个人中心', icon: UserOutlined },
+  { key: 'home', label: '首页', icon: HomeIcon },
+  { key: 'products', label: '商品浏览', icon: ShoppingBagIcon },
+  { key: 'customer-service', label: '客服咨询', icon: ChatBubbleLeftRightIcon },
+  { key: 'profile', label: '个人中心', icon: UserCircleIcon },
 ]
 
 const activePage = ref<UserPage>('home')
@@ -76,10 +74,27 @@ function handleLogout() {
   emit('logout')
 }
 
+// 首页装饰球动画
+const orb1 = ref({ x: 10, y: 15 })
+const orb2 = ref({ x: 80, y: 60 })
+let orbTimer: ReturnType<typeof setInterval> | null = null
+
+onMounted(() => {
+  let t = 0
+  orbTimer = setInterval(() => {
+    t += 0.02
+    orb1.value = { x: 8 + Math.sin(t) * 2, y: 15 + Math.cos(t * 0.7) * 3 }
+    orb2.value = { x: 82 + Math.cos(t * 0.8) * 2, y: 62 + Math.sin(t * 1.1) * 2 }
+  }, 50)
+})
+
+onUnmounted(() => {
+  if (orbTimer) clearInterval(orbTimer)
+})
 </script>
 
 <template>
-  <Layout class="min-h-screen">
+  <div class="min-h-screen bg-page flex flex-col">
     <NavBar
       :user-info="props.userInfo"
       :active-page="activePage"
@@ -87,21 +102,19 @@ function handleLogout() {
       @logout="handleLogout"
     />
 
-    <LayoutContent class="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <!-- 首页 -->
       <div v-if="activePage === 'home'" class="fade-in-up space-y-8">
         <!-- Hero -->
         <section class="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-primary to-primary-dark text-white p-8 sm:p-12 lg:p-16 shadow-card">
-          <motion.div
-            class="hero-orb hero-orb--one absolute w-64 h-64 rounded-full bg-white/10 blur-3xl pointer-events-none"
-            :animate="{ x: [0, 24, 0], y: [0, 20, 0] }"
-            :transition="{ duration: 14, repeat: Infinity, ease: 'easeInOut' }"
-          />
-          <motion.div
-            class="hero-orb hero-orb--two absolute w-80 h-80 rounded-full bg-accent-blue/20 blur-3xl pointer-events-none"
-            :animate="{ x: [0, -28, 0], y: [0, -18, 0] }"
-            :transition="{ duration: 17, repeat: Infinity, ease: 'easeInOut' }"
-          />
+          <div
+            class="absolute w-64 h-64 rounded-full bg-white/10 blur-3xl pointer-events-none"
+            :style="{ left: orb1.x + '%', top: orb1.y + '%' }"
+          ></div>
+          <div
+            class="absolute w-80 h-80 rounded-full bg-accent-blue/20 blur-3xl pointer-events-none"
+            :style="{ left: orb2.x + '%', top: orb2.y + '%' }"
+          ></div>
           <div class="relative z-10 max-w-2xl">
             <p class="text-xs sm:text-sm font-bold tracking-widest uppercase text-white/80 mb-4">
               欢迎回来，{{ props.userInfo.nickname || props.userInfo.username }}
@@ -113,44 +126,36 @@ function handleLogout() {
               浏览真实电商商品数据，AI 智能导购根据您的需求推荐最合适的商品，右下角随时召唤智能助手解答疑问。
             </p>
             <div class="flex flex-wrap gap-4">
-              <Button
-                size="large"
+              <button
                 @click="selectPage('products')"
-                class="!border-0 !font-semibold !text-violet-700"
+                class="bg-white text-primary-dark px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all"
               >
                 开始购物
-              </Button>
-              <Button
-                size="large"
-                ghost
+              </button>
+              <button
                 @click="selectPage('customer-service')"
-                class="!font-semibold"
+                class="bg-white/15 text-white border border-white/30 px-6 py-3 rounded-xl font-semibold hover:bg-white/25 transition-all"
               >
                 联系客服
-              </Button>
+              </button>
             </div>
           </div>
         </section>
 
         <!-- 功能卡片 -->
         <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          <motion.div
+          <div
             v-for="item in menuItems"
             :key="item.key"
             @click="selectPage(item.key)"
-            :while-hover="{ y: -6, scale: 1.01 }"
-            :while-press="{ scale: 0.985 }"
-            :transition="{ type: 'spring', stiffness: 380, damping: 26 }"
-            class="cursor-pointer"
+            class="group bg-white rounded-2xl p-6 border border-primary-light/50 shadow-card hover:shadow-card-hover hover:-translate-y-1 transition-all cursor-pointer"
           >
-            <Card :bordered="false" class="h-full">
-              <div class="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-violet-600 text-xl text-white shadow-lg shadow-violet-200">
-                <component :is="item.icon" />
-              </div>
-              <h3 class="mb-1 text-lg font-bold text-slate-800">{{ item.label }}</h3>
-              <p class="text-sm text-slate-500">点击进入{{ item.label }}页面</p>
-            </Card>
-          </motion.div>
+            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-accent-blue flex items-center justify-center text-white mb-4 shadow-lg shadow-primary/20 group-hover:scale-110 transition-transform">
+              <component :is="item.icon" class="w-6 h-6" />
+            </div>
+            <h3 class="text-lg font-bold text-gray-800 mb-1">{{ item.label }}</h3>
+            <p class="text-sm text-gray-500">点击进入{{ item.label }}页面</p>
+          </div>
         </section>
 
         <!-- 平台亮点 -->
@@ -206,20 +211,8 @@ function handleLogout() {
           </div>
         </slot>
       </template>
-    </LayoutContent>
+    </main>
 
     <ChatWidget />
-  </Layout>
+  </div>
 </template>
-
-<style scoped>
-.hero-orb--one {
-  left: 8%;
-  top: 15%;
-}
-
-.hero-orb--two {
-  left: 82%;
-  top: 62%;
-}
-</style>
