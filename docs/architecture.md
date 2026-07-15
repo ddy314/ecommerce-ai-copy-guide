@@ -8,7 +8,7 @@
 
 ```text
 浏览器
-  └─ Nginx :8080
+  └─ Nginx :8081
       ├─ /                -> Vue 静态文件
       ├─ /api/*           -> Flask :8000
       └─ /health          -> Flask :8000
@@ -141,7 +141,7 @@ docker compose logs -f backend
 - `postgres`：持久化到 `postgres_data` volume。
 - `redis`：缓存服务。
 - `backend`：Alembic 后运行 Gunicorn，仅绑定宿主机 `127.0.0.1:8000`。
-- `frontend`：Nginx 静态站点和反向代理，默认暴露 8080。
+- `frontend`：Nginx 静态站点和反向代理，默认暴露 8081。
 
 停止服务：
 
@@ -157,7 +157,7 @@ docker compose down
 |---|---|
 | `APP_ENV` | `development`；容器内为 `production` |
 | `APP_PORT` | 后端宿主机端口，默认 8000 |
-| `WEB_PORT` | Nginx 暴露端口，默认 8080 |
+| `WEB_PORT` | Nginx 暴露端口，默认 8081 |
 | `DATABASE_URL` | 本地数据库连接；空值使用 instance SQLite |
 | `REDIS_URL` | Redis 连接地址 |
 | `JWT_SECRET` | JWT 签名密钥；生产必须替换 |

@@ -36,7 +36,7 @@ docker compose ps
 
 访问：
 
-- 应用：<http://localhost:8080>
+- 应用：<http://localhost:8081>
 - 后端健康检查：<http://localhost:8000/health>
 - API 文档：<http://localhost:8000/api/docs>
 

@@ -53,4 +53,4 @@ src/
 docker compose up --build -d
 ```
 
-前端 Dockerfile 使用 Node 构建后复制到 Nginx。Nginx 负责 SPA fallback，并将 `/api`、`/health` 同源转发到后端，默认访问地址为 <http://localhost:8080>。
+前端 Dockerfile 使用 Node 构建后复制到 Nginx。Nginx 负责 SPA fallback，并将 `/api`、`/health` 同源转发到后端，默认访问地址为 <http://localhost:8081>。

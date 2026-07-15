@@ -1,0 +1,28 @@
+
+digraph G {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.2, nodesep=0.35, ranksep=0.8, splines=ortho];
+  node [shape=record, style="rounded,filled", fontname="Microsoft YaHei", fontsize=10, fillcolor="#F8FAFC", color="#94A3B8"];
+  edge [color="#64748B", arrowsize=0.7];
+  users [label="{users|身份 · 资料 · 角色}", fillcolor="#DBEAFE", color="#2563EB"];
+  products [label="{products|商品 · 价格 · 媒体}", fillcolor="#ECFDF5", color="#0F766E"];
+  reviews [label="{reviews|评分 · 文本 · 媒体}"];
+  cart [label="{cart_items|用户 · 商品 · 数量}"];
+  orders [label="{orders|状态 · 金额 · 地址快照}", fillcolor="#FEF3C7", color="#D97706"];
+  items [label="{order_items|商品快照 · 数量}"];
+  knowledge [label="{knowledge_entries|规格 · FAQ · 售后}", fillcolor="#F3E8FF", color="#7C3AED"];
+  qa [label="{qa_records|问题 · 回答 · 来源}"];
+  cs [label="{customer_service_messages|会话 · 已读状态}"];
+  tasks [label="{generation_tasks|输入 · 输出 · 状态}"];
+  users -> cart;
+  products -> cart;
+  users -> orders;
+  orders -> items;
+  products -> items;
+  products -> reviews;
+  products -> knowledge;
+  users -> qa;
+  products -> qa;
+  users -> cs;
+  products -> cs;
+  products -> tasks;
+}

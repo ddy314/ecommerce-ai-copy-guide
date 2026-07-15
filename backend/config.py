@@ -18,7 +18,7 @@ class AppConfig:
     ai_provider: str = ""
     ai_model: str = ""
     jwt_secret: str = "development-only-secret-change-me-32-bytes"
-    cors_origins: tuple[str, ...] = ("http://localhost:5173", "http://localhost:8080")
+    cors_origins: tuple[str, ...] = ("http://localhost:5173", "http://localhost:8081")
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -35,7 +35,7 @@ class AppConfig:
             cors_origins=tuple(
                 origin.strip()
                 for origin in os.getenv(
-                    "CORS_ORIGINS", "http://localhost:5173,http://localhost:8080"
+                    "CORS_ORIGINS", "http://localhost:5173,http://localhost:8081"
                 ).split(",")
                 if origin.strip()
             ),
