@@ -375,7 +375,7 @@ onMounted(() => {
         <!-- 卡片头部：订单号、时间、状态 -->
         <div class="om-card__header">
           <div class="om-card__meta">
-            <span class="om-card__no">订单号：{{ order.id }}</span>
+            <span class="om-card__no">订单号：{{ order.order_no }}</span>
             <span class="om-card__time">{{ formatTime(order.created_at) }}</span>
           </div>
           <span

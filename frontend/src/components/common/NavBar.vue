@@ -7,6 +7,7 @@ import {
   SparklesIcon,
   ArrowRightOnRectangleIcon,
 } from '@heroicons/vue/24/outline'
+import { resolveAvatarUrl } from '../../utils/avatar'
 
 interface UserInfo {
   username: string
@@ -68,7 +69,7 @@ function isActive(path: string) {
           <div class="flex items-center space-x-2 bg-white rounded-full pl-2 pr-3 py-1 shadow-sm border border-primary-light/50">
             <img
               v-if="props.userInfo.avatar"
-              :src="props.userInfo.avatar"
+              :src="resolveAvatarUrl(props.userInfo.avatar)"
               class="w-8 h-8 rounded-full object-cover"
             />
             <div

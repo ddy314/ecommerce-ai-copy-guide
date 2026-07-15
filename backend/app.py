@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 
 from backend.api.routes import api_bp
 from backend.api.auth_routes import auth_bp
@@ -47,7 +47,6 @@ def _create_default_users():
                 merchant = User(
                     username="merchant",
                     password_hash=hash_password("merchant123"),
-                    password_plain="merchant123",
                     nickname="商家管理员",
                     role="merchant",
                 )
@@ -62,7 +61,6 @@ def _create_default_users():
                 user = User(
                     username="user",
                     password_hash=hash_password("user123"),
-                    password_plain="user123",
                     nickname="测试用户",
                     role="user",
                 )
@@ -118,6 +116,14 @@ def create_app(config: AppConfig | None = None) -> Flask:
             "error": "bad_request",
             "message": "请求格式错误"
         }), 400
+
+    @app.get("/uploads/<path:filename>")
+    def serve_upload(filename: str):
+        """提供上传文件访问（与前端 /uploads 路径保持一致）"""
+        upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(
+            os.path.dirname(__file__), "uploads"
+        )
+        return send_from_directory(upload_folder, filename)
 
     @app.after_request
     def add_cors_headers(response):

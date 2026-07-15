@@ -101,13 +101,18 @@ def get_db_context() -> Session:
 
 
 def init_db() -> None:
-    """创建所有表"""
+    """创建所有表并执行兼容性迁移"""
     import backend.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    # 1. 先补齐所有缺失的数据库字段（避免后续数据迁移因字段不存在而失败）
     _add_password_plain_column()
-    _add_display_id_columns()
     _add_product_media_columns()
-    _add_order_logistics_columns()
+    _add_product_published_column()
+    _add_order_extra_columns()
+    _add_display_id_columns()
+    # 2. 数据迁移：将残留明文密码哈希化并清空明文
+    _hash_existing_plain_passwords()
+    # 3. 规范化已有订单编号
     _normalize_order_numbers()
 
 
@@ -209,30 +214,122 @@ def _add_product_media_columns() -> None:
         logger.warning(f"添加 product media 字段失败: {e}")
 
 
-def _add_order_logistics_columns() -> None:
-    """为已有 orders 表添加物流与售后字段（如果不存在）"""
+def _add_order_extra_columns() -> None:
+    """为已有 orders 表添加物流、售后与状态时间字段（如果不存在）"""
     try:
         from sqlalchemy import inspect, text
         inspector = inspect(engine)
 
-        if "orders" in inspector.get_table_names():
-            columns = [c["name"] for c in inspector.get_columns("orders")]
-            with engine.connect() as conn:
-                col_defs = [
-                    ("tracking_no", "VARCHAR(100)"),
-                    ("return_tracking_no", "VARCHAR(100)"),
-                    ("return_status", "VARCHAR(20)"),
-                    ("return_reason", "VARCHAR(500)"),
-                    ("return_applied_at", "DateTime"),
-                    ("return_completed_at", "DateTime"),
-                ]
-                for col_name, col_type in col_defs:
-                    if col_name not in columns:
+        if "orders" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("orders")]
+        is_pg = not DATABASE_URL.startswith("sqlite")
+
+        with engine.connect() as conn:
+            col_defs = [
+                ("tracking_no", "VARCHAR(100)"),
+                ("return_tracking_no", "VARCHAR(100)"),
+                ("return_status", "VARCHAR(20)"),
+                ("return_reason", "VARCHAR(500)"),
+                ("return_applied_at", "TIMESTAMP" if is_pg else "DateTime"),
+                ("return_completed_at", "TIMESTAMP" if is_pg else "DateTime"),
+                ("paid_at", "TIMESTAMP" if is_pg else "DateTime"),
+                ("shipped_at", "TIMESTAMP" if is_pg else "DateTime"),
+                ("completed_at", "TIMESTAMP" if is_pg else "DateTime"),
+                ("cancelled_at", "TIMESTAMP" if is_pg else "DateTime"),
+            ]
+            for col_name, col_type in col_defs:
+                if col_name not in columns:
+                    try:
                         conn.execute(text(f"ALTER TABLE orders ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
                         logger.info(f"已为 orders 表添加 {col_name} 字段")
-                conn.commit()
+                    except Exception as col_e:
+                        logger.warning(f"添加 orders.{col_name} 字段失败: {col_e}")
     except Exception as e:
-        logger.warning(f"添加订单物流字段失败: {e}")
+        logger.warning(f"添加订单扩展字段失败: {e}")
+
+
+def _add_product_published_column() -> None:
+    """为已有 products 表添加 is_published 字段，并将现有 NULL 回填为 True"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        if "products" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("products")]
+        with engine.connect() as conn:
+            if "is_published" not in columns:
+                conn.execute(text("ALTER TABLE products ADD COLUMN is_published BOOLEAN"))
+                conn.commit()
+                logger.info("已为 products 表添加 is_published 字段")
+
+        with SessionLocal() as db:
+            from backend.models.product import Product
+
+            updated = (
+                db.query(Product)
+                .filter(Product.is_published.is_(None))
+                .update({"is_published": True}, synchronize_session=False)
+            )
+            db.commit()
+            if updated:
+                logger.info(f"已回填 {updated} 个商品的 is_published 为 True")
+    except Exception as e:
+        logger.warning(f"添加/回填 is_published 字段失败: {e}")
+
+
+def _hash_existing_plain_passwords() -> None:
+    """将现有 users.password_plain 明文密码哈希化到 password_hash，并清空 password_plain。
+
+    说明：
+    - 该函数不再依赖 User ORM 的 password_plain 属性，以便在模型移除该字段后仍可安全执行迁移。
+    - 找到 password_plain 非空的用户，用 hash_password 重新哈希后写入 password_hash，并清空明文。
+    """
+    try:
+        from sqlalchemy import inspect, text
+        from backend.services.auth_service import hash_password
+
+        inspector = inspect(engine)
+        if "users" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("users")]
+        if "password_plain" not in columns:
+            return
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT id, password_plain FROM users "
+                    "WHERE password_plain IS NOT NULL AND password_plain != ''"
+                )
+            ).fetchall()
+            if not rows:
+                return
+
+            updated = 0
+            for user_id, plain in rows:
+                plain_text = (plain or "").strip()
+                if not plain_text:
+                    continue
+                new_hash = hash_password(plain_text)
+                conn.execute(
+                    text(
+                        "UPDATE users SET password_hash = :h, password_plain = NULL WHERE id = :id"
+                    ),
+                    {"h": new_hash, "id": user_id},
+                )
+                updated += 1
+
+            conn.commit()
+            if updated:
+                logger.info(f"已将 {updated} 个用户的明文密码迁移为哈希存储并清空明文")
+    except Exception as e:
+        logger.warning(f"明文密码迁移失败: {e}")
 
 
 def _normalize_order_numbers() -> None:

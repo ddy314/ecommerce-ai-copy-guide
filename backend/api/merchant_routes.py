@@ -207,8 +207,14 @@ def list_merchant_products():
         for cat in all_categories:
             category_counts[cat] = repo.count(cat)
 
+        # 实际上架商品数（全量统计，不随分页变化）
+        published_count = len(list(db.execute(
+            select(Product).where(Product.is_published == True)
+        ).scalars().all()))
+
         return jsonify({
             "total": total,
+            "published_count": published_count,
             "page": page,
             "page_size": page_size,
             "total_pages": total_pages,
@@ -716,7 +722,6 @@ def create_user():
         new_user = User(
             username=username,
             password_hash=hash_password(password),
-            password_plain=password,
             nickname=nickname or username,
             role=role,
         )
@@ -747,7 +752,6 @@ def update_user(user_id: int):
             if len(data["password"]) < 6:
                 return jsonify({"error": "weak_password", "message": "密码长度至少6位"}), 400
             target_user.password_hash = hash_password(data["password"])
-            target_user.password_plain = data["password"]
         if "role" in data and data["role"] in ("user", "merchant"):
             target_user.role = data["role"]
         if "is_active" in data:

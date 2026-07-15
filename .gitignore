@@ -40,3 +40,6 @@ data/processed/
 
 # Docker
 *.pid
+
+# User uploads
+backend/uploads/

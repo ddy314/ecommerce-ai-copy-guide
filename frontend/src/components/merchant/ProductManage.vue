@@ -82,6 +82,7 @@ const error = ref<string | null>(null)
 const products = ref<Product[]>([])
 const categories = ref<string[]>([])
 const total = ref(0)
+const publishedCount = ref(0)
 const totalPages = ref(1)
 const currentPage = ref(1)
 const pageSize = ref(20)
@@ -106,10 +107,6 @@ const imageUploading = ref(false)
 const videoUploading = ref(false)
 
 const modalTitle = computed(() => (editingId.value === null ? '新增商品' : '编辑商品'))
-
-const publishedCount = computed(
-  () => products.value.filter((p) => p.is_published !== false).length,
-)
 
 const pageNumbers = computed(() => {
   const pages: number[] = []
@@ -144,6 +141,7 @@ async function loadProducts() {
     const data = await res.json()
     products.value = data.products || data.items || data.list || []
     total.value = data.total || 0
+    publishedCount.value = data.published_count ?? 0
     totalPages.value = data.total_pages || Math.max(1, Math.ceil(total.value / pageSize.value)) || 1
     // 使用后端返回的分类列表（与用户端同步）
     if (data.categories && data.categories.length > 0) {

@@ -6,7 +6,7 @@ import os
 import uuid
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request, send_from_directory, current_app
+from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import select
 from werkzeug.utils import secure_filename
 
@@ -322,10 +322,3 @@ def upload_avatar():
         return jsonify({"message": "头像上传成功", "avatar": avatar_url, "user": user.to_dict()})
 
 
-@auth_bp.get("/uploads/<path:filename>")
-def serve_upload(filename: str):
-    """提供上传文件访问"""
-    upload_folder = current_app.config.get("UPLOAD_FOLDER") or os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "uploads"
-    )
-    return send_from_directory(upload_folder, filename)
