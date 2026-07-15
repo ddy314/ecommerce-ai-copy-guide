@@ -171,3 +171,37 @@ def api_crawl_stats():
             "categories": {cat: cnt for cat, cnt in cat_stats if cat},
             "platform": "suning",
         })
+
+
+@crawl_bp.post("/vector/build")
+def api_build_vector_index():
+    """构建/更新向量索引（从数据库全量商品构建）"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    from backend.services.vector_index import vector_index
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        products = list(db.execute(
+            select(Product)
+        ).scalars().all())
+
+    count = vector_index.build_index(products)
+    return jsonify({
+        "message": "向量索引构建成功",
+        "indexed_count": count,
+        "status": vector_index.get_status(),
+    })
+
+
+@crawl_bp.get("/vector/status")
+def api_vector_status():
+    """获取向量索引状态"""
+    user, error = require_merchant(request)
+    if error:
+        return jsonify(error), 401
+
+    from backend.services.vector_index import vector_index
+    return jsonify(vector_index.get_status())
