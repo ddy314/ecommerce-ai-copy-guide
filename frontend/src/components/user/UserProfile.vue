@@ -89,6 +89,62 @@ const activeTab = ref<'favorites' | 'history' | 'cart' | 'orders'>('favorites')
 // 提供给子组件（ShoppingCart）切换到订单标签的能力
 provide('switchToOrdersTab', () => { activeTab.value = 'orders' })
 
+// ---------- 商品详情弹窗 ----------
+const productDetailVisible = ref(false)
+const productDetailLoading = ref(false)
+const productDetail = ref<any>(null)
+
+const authHeaders = () => ({
+  'Authorization': `Bearer ${localStorage.getItem('token')}`,
+  'Content-Type': 'application/json',
+})
+
+async function openProductDetail(productId: number) {
+  productDetailVisible.value = true
+  productDetailLoading.value = true
+  productDetail.value = null
+  try {
+    const response = await fetch(`${API_BASE}/api/products/${productId}`, {
+      headers: authHeaders(),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    productDetail.value = await response.json()
+  } catch {
+    showToast('加载商品详情失败', 'error')
+    productDetailVisible.value = false
+  } finally {
+    productDetailLoading.value = false
+  }
+}
+
+function closeProductDetail() {
+  productDetailVisible.value = false
+  productDetail.value = null
+}
+
+async function addToCartFromDetail() {
+  if (!productDetail.value) return
+  try {
+    const response = await fetch(`${API_BASE}/api/user/cart`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ product_id: productDetail.value.id, quantity: 1 }),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    showToast('已加入购物车')
+  } catch {
+    showToast('加入购物车失败', 'error')
+  }
+}
+
+function buyNowFromDetail() {
+  if (!productDetail.value) return
+  // 先加入购物车，然后切换到购物车标签
+  addToCartFromDetail()
+  closeProductDetail()
+  activeTab.value = 'cart'
+}
+
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
   visible: false,
@@ -103,15 +159,6 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastTimer = setTimeout(() => {
     toast.value.visible = false
   }, 2500)
-}
-
-// ---------- 请求头 ----------
-function authHeaders(): HeadersInit {
-  const token = localStorage.getItem('token')
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  }
 }
 
 // ---------- 加载用户信息 ----------
@@ -483,7 +530,7 @@ onMounted(() => {
               v-for="item in favorites"
               :key="item.id"
               class="up-product-card"
-              @click="navigateToProduct(item.id)"
+              @click="openProductDetail(item.id)"
             >
               <div class="up-product-card__image">
                 <img
@@ -519,7 +566,7 @@ onMounted(() => {
               v-for="item in history"
               :key="item.id"
               class="up-product-card"
-              @click="navigateToProduct(item.id)"
+              @click="openProductDetail(item.id)"
             >
               <div class="up-product-card__image">
                 <img
@@ -634,6 +681,38 @@ onMounted(() => {
               {{ addressLoading ? '保存中...' : '保存' }}
             </button>
           </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 商品详情弹窗 -->
+    <transition name="modal">
+      <div v-if="productDetailVisible" class="up-pd-overlay" @click.self="closeProductDetail">
+        <div class="up-pd-modal">
+          <button class="up-pd-close" @click="closeProductDetail">×</button>
+          <div v-if="productDetailLoading" class="up-pd-loading">加载中...</div>
+          <template v-else-if="productDetail">
+            <div class="up-pd-image">
+              <img :src="productDetail.image_url || '/placeholder.png'" :alt="productDetail.name" />
+            </div>
+            <div class="up-pd-info">
+              <h2 class="up-pd-name">{{ productDetail.name }}</h2>
+              <div class="up-pd-price">¥{{ (productDetail.price || 0).toFixed(0) }}</div>
+              <div class="up-pd-meta">
+                <span v-if="productDetail.brand">品牌：{{ productDetail.brand }}</span>
+                <span>分类：{{ productDetail.category }}</span>
+                <span>评分：{{ productDetail.rating || 5.0 }}</span>
+                <span>{{ productDetail.review_count || 0 }}条评价</span>
+              </div>
+              <div v-if="productDetail.selling_points" class="up-pd-points">
+                {{ productDetail.selling_points }}
+              </div>
+              <div class="up-pd-actions">
+                <button class="up-pd-btn--cart" @click="addToCartFromDetail">加入购物车</button>
+                <button class="up-pd-btn--buy" @click="buyNowFromDetail">立即购买</button>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
     </transition>
@@ -1321,5 +1400,139 @@ onMounted(() => {
   .up-product-grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   }
+}
+
+/* ===== 商品详情弹窗 ===== */
+.up-pd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.up-pd-modal {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--bg, #fdfaf6);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.up-pd-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.up-pd-close:hover {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.up-pd-loading {
+  padding: 80px 0;
+  text-align: center;
+  color: var(--muted, #999);
+  font-size: 14px;
+}
+
+.up-pd-image {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 16px 16px 0 0;
+  background: #f5f5f5;
+}
+
+.up-pd-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.up-pd-info {
+  padding: 20px 24px;
+}
+
+.up-pd-name {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--ink, #2a2520);
+  line-height: 1.4;
+}
+
+.up-pd-price {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--brand, #d95f2d);
+  margin-bottom: 16px;
+}
+
+.up-pd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted, #999);
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line, #eee);
+}
+
+.up-pd-points {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink, #2a2520);
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(217, 95, 45, 0.04);
+  border: 1px solid rgba(217, 95, 45, 0.08);
+}
+
+.up-pd-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.up-pd-btn--cart {
+  flex: 1;
+  padding: 12px;
+  border: 2px solid var(--brand, #d95f2d);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--brand, #d95f2d);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.up-pd-btn--buy {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--brand, #d95f2d), var(--brand-dark, #b84a1e));
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
 }
 </style>

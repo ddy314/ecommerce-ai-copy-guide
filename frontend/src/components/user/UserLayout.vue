@@ -218,6 +218,34 @@ function renderMarkdown(text: string): string {
   let html = text
   // 转义 HTML
   html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  // 商品卡片列表处理 [PRODUCT_CARDS]...[/PRODUCT_CARDS]
+  const cardRegex = /\[PRODUCT_CARDS\]([\s\S]*?)\[\/PRODUCT_CARDS\]/g
+  html = html.replace(cardRegex, (_, content) => {
+    const lines = content.trim().split('\n').filter(l => l.trim())
+    let cardsHtml = '<div class="chat-product-list">'
+    lines.forEach((line, idx) => {
+      const parts = line.split('|||')
+      if (parts.length >= 4) {
+        const name = parts[0].trim()
+        const price = parts[1].trim()
+        const rating = parts[2].trim()
+        const reviews = parts[3].trim()
+        cardsHtml += '<div class="chat-product-row">'
+        cardsHtml += `<span class="chat-product-rank">${idx + 1}</span>`
+        cardsHtml += `<span class="chat-product-name">${name}</span>`
+        cardsHtml += '<span class="chat-product-meta">'
+        cardsHtml += `<span class="chat-product-price">${price}</span>`
+        cardsHtml += `<span class="chat-product-tag">${rating}分</span>`
+        cardsHtml += `<span class="chat-product-tag">${reviews}条评价</span>`
+        cardsHtml += '</span>'
+        cardsHtml += '</div>'
+      }
+    })
+    cardsHtml += '</div>'
+    return cardsHtml
+  })
+
   // 粗体 **text**
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
   // 换行
@@ -232,6 +260,9 @@ function renderMarkdown(text: string): string {
   // 清理多余 <br> 在 <ul> 前后
   html = html.replace(/<br>(<ul)/g, '$1')
   html = html.replace(/(<\/ul>)<br>/g, '$1')
+  // 清理表格前后的 <br>
+  html = html.replace(/<br>(<table)/g, '$1')
+  html = html.replace(/(<\/table>)<br>/g, '$1')
   return html
 }
 
@@ -278,6 +309,7 @@ async function sendAIMessage() {
     relatedProducts: [],
   }
   chatMessages.value.push(assistantMsg)
+  const msgIdx = chatMessages.value.length - 1  // 通过索引访问响应式代理
   nextTick(() => scrollToBottom())
 
   try {
@@ -291,7 +323,7 @@ async function sendAIMessage() {
     })
 
     if (!response.ok) {
-      assistantMsg.content = '抱歉，服务暂时不可用，请稍后再试。'
+      chatMessages.value[msgIdx].content = '抱歉，服务暂时不可用，请稍后再试。'
       aiSending.value = false
       return
     }
@@ -314,15 +346,15 @@ async function sendAIMessage() {
             const event = JSON.parse(line.slice(6))
 
             if (event.type === 'product') {
-              assistantMsg.product = event.data
+              chatMessages.value[msgIdx].product = event.data
             } else if (event.type === 'related') {
-              assistantMsg.relatedProducts = event.data
+              chatMessages.value[msgIdx].relatedProducts = event.data
             } else if (event.type === 'text') {
-              assistantMsg.content += event.content
+              chatMessages.value[msgIdx].content += event.content
             } else if (event.type === 'done') {
               // 完成
             } else if (event.type === 'error') {
-              assistantMsg.content = '回答生成失败：' + (event.message || '未知错误')
+              chatMessages.value[msgIdx].content = '回答生成失败：' + (event.message || '未知错误')
             }
             nextTick(() => scrollToBottom())
           } catch {
@@ -333,11 +365,11 @@ async function sendAIMessage() {
     }
 
     // 如果没有收到任何文本
-    if (!assistantMsg.content) {
-      assistantMsg.content = '抱歉，我暂时无法回答这个问题，请稍后再试。'
+    if (!chatMessages.value[msgIdx].content) {
+      chatMessages.value[msgIdx].content = '抱歉，我暂时无法回答这个问题，请稍后再试。'
     }
   } catch {
-    assistantMsg.content = '网络连接异常，请检查网络后重试。'
+    chatMessages.value[msgIdx].content = '网络连接异常，请检查网络后重试。'
   }
   aiSending.value = false
   nextTick(() => scrollToBottom())
@@ -493,6 +525,13 @@ async function sendAIMessage() {
                   class="ai-msg__bubble"
                   v-html="renderMarkdown(msg.content)"
                 ></div>
+                <!-- 打字指示器（content为空时显示在气泡位置） -->
+                <div
+                  v-if="msg.role === 'assistant' && !msg.content && idx === chatMessages.length - 1 && aiSending"
+                  class="ai-msg__bubble ai-msg__typing"
+                >
+                  <span></span><span></span><span></span>
+                </div>
                 <!-- 商品卡片 -->
                 <div v-if="msg.product" class="chat-product-card" @click="navigateToProduct(msg.product.id)">
                   <img
@@ -548,12 +587,6 @@ async function sendAIMessage() {
                     </button>
                   </div>
                 </div>
-              </div>
-            </div>
-            <div v-if="aiSending && (!chatMessages.length || !chatMessages[chatMessages.length - 1].content)" class="ai-msg ai-msg--assistant">
-              <span class="ai-msg__avatar">AI</span>
-              <div class="ai-msg__bubble ai-msg__typing">
-                <span></span><span></span><span></span>
               </div>
             </div>
           </div>
@@ -1241,6 +1274,85 @@ async function sendAIMessage() {
   left: -14px;
   color: var(--brand);
   font-weight: bold;
+}
+
+/* 商品推荐卡片列表 */
+.ai-msg__bubble :deep(.chat-product-list) {
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-msg__bubble :deep(.chat-product-row) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(217, 95, 45, 0.04);
+  border: 1px solid rgba(217, 95, 45, 0.1);
+  transition: background 0.15s;
+}
+
+.ai-msg__bubble :deep(.chat-product-row:hover) {
+  background: rgba(217, 95, 45, 0.08);
+}
+
+.ai-msg__bubble :deep(.chat-product-rank) {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--brand);
+}
+
+.ai-msg__bubble :deep(.chat-product-row:nth-child(1) .chat-product-rank) {
+  background: linear-gradient(135deg, #f0a020, #d4880e);
+}
+
+.ai-msg__bubble :deep(.chat-product-row:nth-child(2) .chat-product-rank) {
+  background: linear-gradient(135deg, #b0b0b0, #888);
+}
+
+.ai-msg__bubble :deep(.chat-product-row:nth-child(3) .chat-product-rank) {
+  background: linear-gradient(135deg, #cd853f, #a0682a);
+}
+
+.ai-msg__bubble :deep(.chat-product-name) {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.ai-msg__bubble :deep(.chat-product-meta) {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-msg__bubble :deep(.chat-product-price) {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--brand);
+  white-space: nowrap;
+}
+
+.ai-msg__bubble :deep(.chat-product-tag) {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 /* 商品卡片 */

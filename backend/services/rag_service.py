@@ -2,14 +2,18 @@
 
 当用户提问时，自动从数据库检索匹配商品、评论、同类商品，
 结合品牌知识库构建数据驱动的精准回答，而非模板回复。
+
+双阶段混合检索：规则过滤(Stage 1) + 向量重排序(Stage 2)
+AI 大模型回答：检索到商品数据后，调用 LLM 生成自然语言回答。
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections import Counter
-from typing import Optional
+from typing import Optional, Generator
 
 from sqlalchemy import select, or_, func
 
@@ -17,6 +21,7 @@ from backend.database import SessionLocal
 from backend.models.knowledge_base import KnowledgeEntry, QARecord
 from backend.models.product import Product
 from backend.models.review import Review
+from backend.services.vector_index import vector_index
 
 logger = logging.getLogger(__name__)
 
@@ -178,13 +183,69 @@ class RAGService:
                     .limit(10)
                 ).scalars().all())
 
-                # 获取同类推荐商品
-                related_products = list(db.execute(
-                    select(Product).where(
-                        Product.category == product.category,
-                        Product.id != product.id,
-                    ).order_by(Product.rating.desc()).limit(5)
-                ).scalars().all())
+                # 获取同类推荐商品 - 使用主商品名称中的核心关键词，避免推荐不同品类的商品
+                primary_kws = self._extract_primary_keywords(question)
+                price_limit = self._extract_price_constraint(question)
+                price_range = self._extract_price_range(question) if not price_limit else None
+                spec_constraints = self._extract_spec_constraints(question)
+
+                # 从主商品名称中提取最具体的商品类型关键词
+                # 例如：主商品是"奶粉"，则推荐商品名称也必须包含"奶粉"
+                product_type_kws = []
+                product_name_lower = (product.name or "").lower()
+                for kw in primary_kws:
+                    if kw.lower() in product_name_lower:
+                        product_type_kws.append(kw)
+
+                # 如果没有从主商品名中找到关键词，退化为所有核心关键词
+                search_kws_for_related = product_type_kws if product_type_kws else primary_kws
+
+                if search_kws_for_related:
+                    # 优先用最具体的关键词（最长的）筛选
+                    search_kws_for_related.sort(key=len, reverse=True)
+                    # 取前2个最具体的关键词，用AND逻辑（必须同时包含）
+                    top_kws = search_kws_for_related[:2]
+                    kw_filter = [Product.name.ilike(f"%{kw}%") for kw in top_kws]
+                    from sqlalchemy import and_ as sql_and
+                    related_products = list(db.execute(
+                        select(Product).where(
+                            Product.category == product.category,
+                            Product.id != product.id,
+                            sql_and(*kw_filter),
+                        ).order_by(Product.rating.desc()).limit(10)
+                    ).scalars().all())
+                    # 如果AND过滤后结果太少，降级为OR
+                    if len(related_products) < 2 and len(top_kws) > 1:
+                        kw_conditions = [Product.name.ilike(f"%{kw}%") for kw in top_kws]
+                        related_products = list(db.execute(
+                            select(Product).where(
+                                Product.category == product.category,
+                                Product.id != product.id,
+                                or_(*kw_conditions),
+                            ).order_by(Product.rating.desc()).limit(10)
+                        ).scalars().all())
+                else:
+                    related_products = list(db.execute(
+                        select(Product).where(
+                            Product.category == product.category,
+                            Product.id != product.id,
+                        ).order_by(Product.rating.desc()).limit(10)
+                    ).scalars().all())
+
+                # 应用价格约束
+                if price_limit:
+                    price_filtered = [p for p in related_products if (p.price or 0) <= price_limit]
+                    if price_filtered:
+                        related_products = price_filtered
+                elif price_range:
+                    price_filtered = [p for p in related_products if price_range[0] <= (p.price or 0) <= price_range[1]]
+                    if price_filtered:
+                        related_products = price_filtered
+
+                # 应用规格约束
+                related_products = self._apply_spec_filter(related_products, spec_constraints)
+                # 截取前5个
+                related_products = related_products[:5]
 
         # 构建回答
         if product:
@@ -267,6 +328,138 @@ class RAGService:
             return best_category
         return None
 
+    def _extract_price_constraint(self, question: str) -> Optional[float]:
+        """从问题中提取价格上限约束
+
+        支持：
+        - "300元以内" / "300以内" / "300元以下" / "300元一下"（常见错别字）
+        - "不超过500" / "500块以下" / "500以内"
+        - "预算300" / "预算300元"
+        - "200-500元" (取下限200，因为是预算下限)
+        - "低于300" / "小于300"
+        """
+        # 先做错别字纠正常见误写
+        normalized = question.replace("一下", "以下")
+
+        # 匹配 "数字+元/块 + 以内/以下/内" 或 "不超过/预算 + 数字"
+        patterns = [
+            r'(\d+(?:\.\d+)?)\s*(?:元|块钱?|RMB|￥)\s*(?:以内|以下|内|之内)',
+            r'(?:不超过|不高于|最多|预算)\s*(\d+(?:\.\d+)?)',
+            r'(?:以内|以下|内|之内)\s*(\d+(?:\.\d+)?)\s*(?:元|块钱?)',
+            r'(\d+(?:\.\d+)?)\s*[-~到]\s*\d+(?:\.\d+)?\s*(?:元|块钱?)',  # 范围取下限
+            r'低于\s*(\d+(?:\.\d+)?)',
+            r'小于\s*(\d+(?:\.\d+)?)',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, normalized)
+            if m:
+                try:
+                    return float(m.group(1))
+                except (ValueError, IndexError):
+                    pass
+        return None
+
+    def _extract_price_range(self, question: str) -> Optional[tuple[float, float]]:
+        """从问题中提取价格范围约束（用于"左右"类查询）
+
+        支持：
+        - "300元左右" → (240, 360) ±20%
+        - "500块左右" → (400, 600)
+        - "大约200元" / "大概200元" / "约200元"
+        - "200-400元" → (200, 400) 直接范围
+        """
+        normalized = question.replace("一下", "以下")
+
+        # 1. "数字 + 元/块 + 左右/上下/差不多"
+        m = re.search(r'(\d+(?:\.\d+)?)\s*(?:元|块钱?|RMB|￥)\s*(?:左右|上下|差不多|前后)', normalized)
+        if m:
+            center = float(m.group(1))
+            return (center * 0.7, center * 1.3)
+
+        # 2. "左右/大约/大概/约 + 数字 + 元"
+        m = re.search(r'(?:左右|大约|大概|约|差不多)\s*(\d+(?:\.\d+)?)\s*(?:元|块钱?)', normalized)
+        if m:
+            center = float(m.group(1))
+            return (center * 0.7, center * 1.3)
+
+        # 3. "数字-数字 + 元" 明确范围
+        m = re.search(r'(\d+(?:\.\d+)?)\s*[-~到]\s*(\d+(?:\.\d+)?)\s*(?:元|块钱?)', normalized)
+        if m:
+            return (float(m.group(1)), float(m.group(2)))
+
+        return None
+
+    def _extract_spec_constraints(self, question: str) -> list[str]:
+        """从问题中提取规格/年龄段等约束关键词
+
+        这些关键词必须在商品名称中出现，否则不匹配。
+        例如：
+        - 奶粉: "0-6个月" → 商品名必须包含"0-6"或"1段"或"新生儿"
+        - 服装: "XL码" → 商品名必须包含"XL"
+        - 人群: "老人用的" → 商品名包含"老人/老年/长辈"
+        """
+        constraints = []
+
+        # 婴儿奶粉段数/年龄
+        # "0-6个月" / "0~6个月" → 匹配 1段 或 0-6
+        age_patterns = [
+            (r'0\s*[-~到]\s*(?:6|3)\s*个?月', ['1段', '0-6', '0~6', '0-3', '0~3', '新生儿', '初生']),
+            (r'(?:6|3)\s*[-~到]\s*12\s*个?月', ['2段', '6-12', '6~12', '较大']),
+            (r'1?\s*[-~到]\s*3?\s*岁', ['3段', '12-36', '12~36', '1-3', '幼儿']),
+            (r'1段', ['1段']),
+            (r'2段', ['2段']),
+            (r'3段', ['3段']),
+            (r'新生儿', ['新生儿', '初生', '1段']),
+            (r'婴儿', ['婴儿', '1段', '2段']),
+        ]
+        for pattern, required_kws in age_patterns:
+            if re.search(pattern, question):
+                constraints.extend(required_kws)
+                break  # 只匹配一个年龄段
+
+        # 适龄人群约束
+        # "适合老人用" → 商品名包含"老人/老年/长辈"
+        # "学生用的" → 商品名包含"学生/校园"
+        # "儿童/小孩用" → 商品名包含"儿童/小孩/幼"
+        audience_patterns = [
+            (r'(?:老人|老年|长辈|爷爷|奶奶)', ['老人', '老年', '长辈', '中老年', '父母']),
+            (r'(?:学生|学生党|宿舍|校园)', ['学生', '校园', '宿舍', '学生党']),
+            (r'(?:儿童|小孩|孩子|幼儿|宝宝)', ['儿童', '小孩', '孩子', '幼儿', '宝宝', '婴儿']),
+            (r'(?:孕妇|孕妈|怀孕)', ['孕妇', '孕妈', '怀孕', '妈咪']),
+            (r'(?:男士|男人|男生)', ['男士', '男', '先生']),
+            (r'(?:女士|女人|女生)', ['女士', '女', '小姐', '姑娘']),
+            (r'(?:运动|健身|跑步)', ['运动', '健身', '跑步']),
+            (r'(?:商务|办公|职场)', ['商务', '办公', '职场']),
+        ]
+        for pattern, required_kws in audience_patterns:
+            if re.search(pattern, question):
+                constraints.extend(required_kws)
+                break  # 人群只匹配一个
+
+        # 服装尺码
+        size_patterns = [
+            r'[Xx]+[LlSs]', r'\d+码', r'均码',
+        ]
+        for pattern in size_patterns:
+            m = re.search(pattern, question)
+            if m:
+                constraints.append(m.group(0).upper())
+
+        return constraints
+
+    def _apply_spec_filter(self, products: list[Product], spec_constraints: list[str]) -> list[Product]:
+        """过滤商品列表，只保留名称中包含任一规格约束的商品"""
+        if not spec_constraints:
+            return products
+        filtered = []
+        for p in products:
+            name_lower = (p.name or "").lower()
+            # 商品名只需包含任一约束关键词即可
+            if any(c.lower() in name_lower for c in spec_constraints):
+                filtered.append(p)
+        # 如果过滤后为空，返回原始列表（降级策略，避免无结果）
+        return filtered if filtered else products
+
     def _extract_primary_keywords(self, question: str) -> list[str]:
         """提取问题中的商品核心关键词（直接来自分类关键词表）"""
         q_lower = question.lower()
@@ -280,6 +473,86 @@ class RAGService:
         primary_kws.sort(key=len, reverse=True)
         return primary_kws
 
+    def _vector_rerank(
+        self,
+        question: str,
+        candidates: list[Product],
+        keywords: list[str],
+        spec_constraints: list[str],
+        detected_category: Optional[str] = None,
+    ) -> Optional[Product]:
+        """第二阶段：向量语义重排序
+
+        对规则过滤后的候选集做向量相似度排序，取最佳匹配。
+        如果向量索引不可用或为空，降级为关键词加权排序。
+
+        综合评分 = 向量相似度 × 0.6 + 关键词匹配度 × 0.3 + 评分 × 0.1
+        """
+        if not candidates:
+            return None
+
+        # 尝试向量重排序
+        try:
+            candidate_ids = [p.id for p in candidates]
+            # 构造用于向量搜索的查询文本（拼接关键词增强语义）
+            query_text = question
+            if keywords:
+                query_text = question + " " + " ".join(keywords[:3])
+
+            vector_results = vector_index.search(
+                query=query_text,
+                candidate_ids=candidate_ids,
+                top_k=len(candidates),
+            )
+
+            if vector_results:
+                # 建立 product_id → similarity 映射
+                sim_map = {r["product_id"]: r["similarity"] for r in vector_results}
+
+                # 综合评分：向量相似度(60%) + 关键词匹配(30%) + 评分(10%)
+                def combined_score(p: Product) -> float:
+                    vec_sim = sim_map.get(p.id, 0.0)
+                    kw_score = 0.0
+                    name_lower = (p.name or "").lower()
+                    for kw in keywords:
+                        if kw.lower() in name_lower:
+                            kw_score += len(kw) * 2.0
+                    for sc in spec_constraints:
+                        if sc.lower() in name_lower:
+                            kw_score += 10.0
+                    if detected_category and p.category == detected_category:
+                        kw_score += 5.0
+                    rating_score = (p.rating or 0) * 0.1
+                    return vec_sim * 0.6 + min(kw_score, 30.0) * 0.3 + rating_score * 0.1
+
+                candidates.sort(key=combined_score, reverse=True)
+                logger.info(
+                    f"向量重排序完成: {len(candidates)} 个候选, "
+                    f"最佳: {candidates[0].name[:30]} (sim={sim_map.get(candidates[0].id, 0):.3f})"
+                )
+                return candidates[0]
+
+        except Exception as e:
+            logger.warning(f"向量重排序失败，降级为关键词排序: {e}")
+
+        # 降级：纯关键词加权排序
+        def fallback_score(p: Product) -> float:
+            score = 0.0
+            name_lower = (p.name or "").lower()
+            for kw in keywords:
+                if kw.lower() in name_lower:
+                    score += len(kw) * 5.0
+            for sc in spec_constraints:
+                if sc.lower() in name_lower:
+                    score += 10.0
+            if detected_category and p.category == detected_category:
+                score += 5.0
+            score += (p.rating or 0) * 0.1
+            return score
+
+        candidates.sort(key=fallback_score, reverse=True)
+        return candidates[0]
+
     def _search_product_by_question(self, db, question: str) -> Optional[Product]:
         """从问题关键词搜索数据库中最匹配的商品 - 带分类精准过滤
 
@@ -288,13 +561,27 @@ class RAGService:
         1. 核心关键词 + 分类匹配
         2. 通用关键词 + 分类匹配
         3. 全局关键词匹配
+
+        所有层级均会应用价格上限、价格范围和规格约束过滤。
         """
+        # ===== 提取约束条件 =====
+        price_limit = self._extract_price_constraint(question)
+        price_range = self._extract_price_range(question) if not price_limit else None
+        spec_constraints = self._extract_spec_constraints(question)
+
         # ===== 0. 精确商品名匹配（最高优先级）=====
         # 当用户直接粘贴商品名或问题中包含较长的商品名片段时，
         # 优先在数据库中查找名称最接近的商品
         exact_match = self._try_exact_product_match(db, question)
         if exact_match:
-            return exact_match
+            # 即使精确匹配也要检查价格约束
+            ep = exact_match.price or 0
+            if price_limit and ep > price_limit:
+                pass  # 价格超出上限，继续搜索
+            elif price_range and not (price_range[0] <= ep <= price_range[1]):
+                pass  # 价格不在范围内，继续搜索
+            else:
+                return exact_match
 
         # 1. 提取商品核心关键词（如"猫粮"、"口红"）
         primary_kws = self._extract_primary_keywords(question)
@@ -319,18 +606,25 @@ class RAGService:
                     select(Product).where(or_(*conditions)).limit(50)
                 ).scalars().all())
 
+            # 应用价格约束过滤
+            if price_limit:
+                price_filtered = [p for p in results if (p.price or 0) <= price_limit]
+                if price_filtered:
+                    results = price_filtered
+            elif price_range:
+                price_filtered = [p for p in results if price_range[0] <= (p.price or 0) <= price_range[1]]
+                if price_filtered:
+                    results = price_filtered
+
+            # 应用规格约束过滤（年龄段、尺码等）
+            results = self._apply_spec_filter(results, spec_constraints)
+
             if results:
-                # 按核心关键词匹配度排序
-                def primary_score(p: Product) -> float:
-                    score = 0.0
-                    name_lower = (p.name or "").lower()
-                    for kw in primary_kws:
-                        if kw.lower() in name_lower:
-                            score += len(kw) * 5.0  # 核心关键词权重极高
-                    score += (p.rating or 0) * 0.1
-                    return score
-                results.sort(key=primary_score, reverse=True)
-                return results[0]
+                # ===== 第二阶段：向量语义重排序 =====
+                # 用向量相似度对候选集做语义排序，替代纯关键词匹配度排序
+                best = self._vector_rerank(question, results, primary_kws, spec_constraints)
+                if best:
+                    return best
 
         # 4. 核心关键词没找到，用通用关键词搜索
         keywords = self._extract_keywords(question)
@@ -349,38 +643,44 @@ class RAGService:
                     or_(*conditions),
                 ).limit(50)
             ).scalars().all())
+            # 应用价格约束
+            if price_limit:
+                price_filtered = [p for p in results if (p.price or 0) <= price_limit]
+                if price_filtered:
+                    results = price_filtered
+            elif price_range:
+                price_filtered = [p for p in results if price_range[0] <= (p.price or 0) <= price_range[1]]
+                if price_filtered:
+                    results = price_filtered
+            # 应用规格约束
+            results = self._apply_spec_filter(results, spec_constraints)
             if results:
-                def kw_score(p: Product) -> float:
-                    score = 0.0
-                    name_lower = (p.name or "").lower()
-                    for kw in search_kws:
-                        if kw.lower() in name_lower:
-                            score += len(kw) * 2.0
-                    score += (p.rating or 0) * 0.1
-                    return score
-                results.sort(key=kw_score, reverse=True)
-                return results[0]
+                # ===== 第二阶段：向量语义重排序 =====
+                best = self._vector_rerank(question, results, search_kws, spec_constraints)
+                if best:
+                    return best
 
         # 5. 全局搜索
         all_results = list(db.execute(
             select(Product).where(or_(*conditions)).limit(50)
         ).scalars().all())
+        # 应用价格约束
+        if price_limit:
+            price_filtered = [p for p in all_results if (p.price or 0) <= price_limit]
+            if price_filtered:
+                all_results = price_filtered
+        elif price_range:
+            price_filtered = [p for p in all_results if price_range[0] <= (p.price or 0) <= price_range[1]]
+            if price_filtered:
+                all_results = price_filtered
+        # 应用规格约束
+        all_results = self._apply_spec_filter(all_results, spec_constraints)
         if not all_results:
             return None
 
-        def global_score(p: Product) -> float:
-            score = 0.0
-            name_lower = (p.name or "").lower()
-            for kw in search_kws:
-                if kw.lower() in name_lower:
-                    score += len(kw) * 2.0
-            if detected_category and p.category == detected_category:
-                score += 5.0
-            score += (p.rating or 0) * 0.1
-            return score
-
-        all_results.sort(key=global_score, reverse=True)
-        return all_results[0] if all_results else None
+        # ===== 第二阶段：向量语义重排序 =====
+        best = self._vector_rerank(question, all_results, search_kws, spec_constraints, detected_category)
+        return best
 
     def _try_exact_product_match(self, db, question: str) -> Optional[Product]:
         """尝试从问题中提取商品名并精确匹配数据库中的商品
@@ -517,6 +817,343 @@ class RAGService:
         candidates.sort(key=len, reverse=True)
         return candidates
 
+    def _generate_ai_answer(
+        self,
+        question: str,
+        q_type: str,
+        product: Product,
+        reviews: list[Review],
+        related: list[Product],
+    ) -> str:
+        """调用 AI 大模型生成自然语言回答
+
+        将检索到的商品数据、评论、推荐商品作为上下文，
+        调用 LLM 生成口语化、有温度的导购回答。
+        如果 LLM 不可用，降级为模板回答。
+        """
+        # 构建上下文数据
+        context_parts = [f"用户问题：{question}"]
+        context_parts.append(f"问题类型：{q_type}")
+
+        # 主商品信息
+        context_parts.append(f"\n【主推商品】")
+        context_parts.append(f"名称：{product.name}")
+        context_parts.append(f"价格：¥{product.price or 0:.0f}")
+        context_parts.append(f"评分：{product.rating or 5.0}分（{product.review_count or 0}条评价）")
+        context_parts.append(f"品牌：{self._get_real_brand(product)}")
+        context_parts.append(f"分类：{product.category or '综合'}")
+        if product.selling_points:
+            context_parts.append(f"卖点：{product.selling_points[:200]}")
+        if product.specs:
+            context_parts.append(f"规格：{product.specs[:200]}")
+
+        # 用户评论摘要
+        if reviews:
+            context_parts.append(f"\n【用户评价摘录】")
+            for r in reviews[:3]:
+                rating_text = f"{r.rating}星" if r.rating else ""
+                context_parts.append(f"- {rating_text}：{r.content[:80] if r.content else '无评论内容'}")
+
+        # 推荐商品
+        if related:
+            context_parts.append(f"\n【同类推荐商品】")
+            for p in related[:5]:
+                context_parts.append(f"- {p.name} | ¥{p.price or 0:.0f} | {p.rating or 5.0}分")
+
+        context = "\n".join(context_parts)
+
+        # 系统提示
+        system_prompt = """你是一位专业的电商导购助手，擅长根据用户需求推荐合适的商品。
+请基于提供的商品数据，用自然、亲切的语气回答用户问题。
+
+要求：
+1. 回答要口语化、有温度，像朋友聊天一样
+2. 直接给出推荐商品的核心信息（名称、价格、评分）
+3. 突出商品的卖点和优势
+4. 如果有同类推荐，简要提及2-3个备选
+5. 回答控制在200字以内，简洁有力
+6. 不要编造数据，只使用提供的商品信息"""
+
+        user_prompt = f"{context}\n\n请根据以上商品数据回答用户的问题。"
+
+        try:
+            from openai import OpenAI
+            api_key = os.getenv("AI_API_KEY", "")
+            base_url = os.getenv("AI_BASE_URL", "")
+            model = os.getenv("AI_MODEL", "gpt-4o-mini")
+
+            if not api_key:
+                # 没有配置 API Key，降级为模板回答
+                return self._build_data_driven_answer(question, q_type, product, reviews, related)
+
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            client = OpenAI(**kwargs)
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=500,
+            )
+            ai_answer = response.choices[0].message.content or ""
+
+            # 追加推荐商品卡片（供前端渲染）
+            if related:
+                ai_answer += self._format_related_table(related)
+
+            return ai_answer.strip()
+
+        except Exception as e:
+            logger.warning(f"AI 大模型调用失败，降级为模板回答: {e}")
+            return self._build_data_driven_answer(question, q_type, product, reviews, related)
+
+    def _generate_ai_answer_stream(
+        self,
+        question: str,
+        q_type: str,
+        product: Product,
+        reviews: list[Review],
+        related: list[Product],
+    ) -> Generator[str, None, None]:
+        """调用 AI 大模型流式生成回答（逐 token yield）
+
+        如果 LLM 不可用，降级为模板回答的非流式输出。
+        """
+        # 构建上下文数据
+        context_parts = [f"用户问题：{question}"]
+        context_parts.append(f"问题类型：{q_type}")
+
+        context_parts.append(f"\n【主推商品】")
+        context_parts.append(f"名称：{product.name}")
+        context_parts.append(f"价格：¥{product.price or 0:.0f}")
+        context_parts.append(f"评分：{product.rating or 5.0}分（{product.review_count or 0}条评价）")
+        context_parts.append(f"品牌：{self._get_real_brand(product)}")
+        context_parts.append(f"分类：{product.category or '综合'}")
+        if product.selling_points:
+            context_parts.append(f"卖点：{product.selling_points[:200]}")
+        if product.specs:
+            context_parts.append(f"规格：{product.specs[:200]}")
+
+        if reviews:
+            context_parts.append(f"\n【用户评价摘录】")
+            for r in reviews[:3]:
+                rating_text = f"{r.rating}星" if r.rating else ""
+                context_parts.append(f"- {rating_text}：{r.content[:80] if r.content else '无评论内容'}")
+
+        if related:
+            context_parts.append(f"\n【同类推荐商品】")
+            for p in related[:5]:
+                context_parts.append(f"- {p.name} | ¥{p.price or 0:.0f} | {p.rating or 5.0}分")
+
+        context = "\n".join(context_parts)
+
+        system_prompt = """你是一位专业的电商导购助手，擅长根据用户需求推荐合适的商品。
+请基于提供的商品数据，用自然、亲切的语气回答用户问题。
+
+要求：
+1. 回答要口语化、有温度，像朋友聊天一样
+2. 直接给出推荐商品的核心信息（名称、价格、评分）
+3. 突出商品的卖点和优势
+4. 如果有同类推荐，简要提及2-3个备选
+5. 回答控制在200字以内，简洁有力
+6. 不要编造数据，只使用提供的商品信息"""
+
+        user_prompt = f"{context}\n\n请根据以上商品数据回答用户的问题。"
+
+        try:
+            from openai import OpenAI
+            api_key = os.getenv("AI_API_KEY", "")
+            base_url = os.getenv("AI_BASE_URL", "")
+            model = os.getenv("AI_MODEL", "gpt-4o-mini")
+
+            if not api_key:
+                # 没有配置 API Key，降级为模板回答
+                answer = self._build_data_driven_answer(question, q_type, product, reviews, related)
+                for chunk in answer:
+                    yield chunk
+                return
+
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            client = OpenAI(**kwargs)
+
+            # 使用 stream=True 流式调用
+            stream = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=500,
+                stream=True,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+            # 流式结束后追加推荐商品卡片
+            if related:
+                yield self._format_related_table(related)
+
+        except Exception as e:
+            logger.warning(f"AI 大模型流式调用失败，降级为模板回答: {e}")
+            answer = self._build_data_driven_answer(question, q_type, product, reviews, related)
+            for chunk in answer:
+                yield chunk
+
+    def answer_question_stream(
+        self,
+        question: str,
+        product_id: int | None = None,
+        user_id: int | None = None,
+    ) -> Generator[dict, None, None]:
+        """流式问答 - 先推送商品数据，再流式推送 AI 回答
+
+        Yields:
+            dict: {"type": "product"/"related"/"text"/"done"/"error", ...}
+        """
+        q_type = self._detect_question_type(question)
+
+        product: Optional[Product] = None
+        related_products: list[Product] = []
+        reviews: list[Review] = []
+
+        with SessionLocal() as db:
+            if product_id:
+                product = db.get(Product, product_id)
+            else:
+                product = self._search_product_by_question(db, question)
+
+            if product:
+                reviews = list(db.execute(
+                    select(Review)
+                    .where(Review.product_id == product.id)
+                    .order_by(Review.created_at.desc())
+                    .limit(10)
+                ).scalars().all())
+
+                # 获取同类推荐
+                primary_kws = self._extract_primary_keywords(question)
+                price_limit = self._extract_price_constraint(question)
+                price_range = self._extract_price_range(question) if not price_limit else None
+                spec_constraints = self._extract_spec_constraints(question)
+
+                product_type_kws = []
+                product_name_lower = (product.name or "").lower()
+                for kw in primary_kws:
+                    if kw.lower() in product_name_lower:
+                        product_type_kws.append(kw)
+
+                search_kws_for_related = product_type_kws if product_type_kws else primary_kws
+
+                if search_kws_for_related:
+                    search_kws_for_related.sort(key=len, reverse=True)
+                    top_kws = search_kws_for_related[:2]
+                    kw_filter = [Product.name.ilike(f"%{kw}%") for kw in top_kws]
+                    from sqlalchemy import and_ as sql_and
+                    related_products = list(db.execute(
+                        select(Product).where(
+                            Product.category == product.category,
+                            Product.id != product.id,
+                            sql_and(*kw_filter),
+                        ).order_by(Product.rating.desc()).limit(10)
+                    ).scalars().all())
+                    if len(related_products) < 2 and len(top_kws) > 1:
+                        kw_conditions = [Product.name.ilike(f"%{kw}%") for kw in top_kws]
+                        related_products = list(db.execute(
+                            select(Product).where(
+                                Product.category == product.category,
+                                Product.id != product.id,
+                                or_(*kw_conditions),
+                            ).order_by(Product.rating.desc()).limit(10)
+                        ).scalars().all())
+                else:
+                    related_products = list(db.execute(
+                        select(Product).where(
+                            Product.category == product.category,
+                            Product.id != product.id,
+                        ).order_by(Product.rating.desc()).limit(10)
+                    ).scalars().all())
+
+                if price_limit:
+                    price_filtered = [p for p in related_products if (p.price or 0) <= price_limit]
+                    if price_filtered:
+                        related_products = price_filtered
+                elif price_range:
+                    price_filtered = [p for p in related_products if price_range[0] <= (p.price or 0) <= price_range[1]]
+                    if price_filtered:
+                        related_products = price_filtered
+
+                related_products = self._apply_spec_filter(related_products, spec_constraints)
+                related_products = related_products[:5]
+
+        # 推送主商品数据
+        if product:
+            yield {
+                "type": "product",
+                "data": {
+                    "id": product.id,
+                    "name": product.name,
+                    "price": product.price or 0,
+                    "rating": product.rating or 5.0,
+                    "category": product.category or "",
+                    "image_url": product.image_url or "",
+                    "brand": self._get_real_brand(product),
+                },
+            }
+
+        # 推送推荐商品数据
+        if related_products:
+            related_info = []
+            for p in related_products[:3]:
+                related_info.append({
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price or 0,
+                    "rating": p.rating or 5.0,
+                    "category": p.category or "",
+                    "image_url": p.image_url or "",
+                })
+            yield {"type": "related", "data": related_info}
+
+        # 流式推送 AI 回答
+        full_answer = ""
+        if product:
+            for text_chunk in self._generate_ai_answer_stream(
+                question, q_type, product, reviews, related_products
+            ):
+                full_answer += text_chunk
+                yield {"type": "text", "content": text_chunk}
+        else:
+            full_answer = self._build_no_match_answer(question, q_type)
+            yield {"type": "text", "content": full_answer}
+
+        # 记录问答
+        try:
+            with SessionLocal() as db:
+                record = QARecord(
+                    user_id=user_id,
+                    product_id=product.id if product else product_id,
+                    question=question,
+                    answer=full_answer,
+                    question_type=q_type,
+                    source="ai_rag",
+                )
+                db.add(record)
+                db.commit()
+        except Exception as e:
+            logger.warning(f"问答记录保存失败: {e}")
+
+        yield {"type": "done"}
+
     def _build_data_driven_answer(
         self,
         question: str,
@@ -591,6 +1228,21 @@ class RAGService:
 
         return "\n".join(parts)
 
+    def _format_related_table(self, related: list[Product]) -> str:
+        """将推荐商品格式化为卡片列表（前端解析为卡片展示）"""
+        if not related:
+            return ""
+        lines = ["\n[PRODUCT_CARDS]"]
+        for p in related[:5]:
+            name = p.name or ""
+            price = f"¥{p.price or 0:.0f}"
+            rating = f"{p.rating or 5.0}"
+            reviews = f"{p.review_count or 0}"
+            # 用 ||| 分隔字段
+            lines.append(f"{name}|||{price}|||{rating}|||{reviews}")
+        lines.append("[/PRODUCT_CARDS]")
+        return "\n".join(lines)
+
     def _answer_recommend(self, product: Product, related: list[Product], question: str) -> str:
         """推荐/导购问题 - 用真实商品数据推荐"""
         parts = [f"根据您的需求，为您推荐「{product.name}」："]
@@ -603,11 +1255,8 @@ class RAGService:
         parts.append(f"• 分类：{product.category or '综合'}")
 
         if related:
-            parts.append(f"\n同分类其他优质选择：")
-            for i, p in enumerate(related[:3], 1):
-                parts.append(
-                    f"  {i}. 「{p.name}」¥{p.price or 0:.0f} | {p.rating or 5.0}分 | {p.review_count or 0}条评价"
-                )
+            parts.append(f"\n**同分类其他优质选择：**")
+            parts.append(self._format_related_table(related))
 
         return "\n".join(parts)
 

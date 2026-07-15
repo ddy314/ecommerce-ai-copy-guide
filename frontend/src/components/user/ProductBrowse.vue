@@ -61,6 +61,17 @@ const detailProduct = ref<ProductDetail | null>(null)
 const detailQuantity = ref(1)
 const isFavorited = ref(false)
 
+// 立即购买 - 结算弹窗
+const checkoutVisible = ref(false)
+const checkoutLoading = ref(false)
+const addresses = ref<any[]>([])
+const selectedAddressId = ref<number | null>(null)
+const payMethod = ref<'wechat' | 'alipay'>('wechat')
+const remark = ref('')
+const showAddressForm = ref(false)
+const addressForm = ref({ recipient: '', phone: '', province: '', city: '', district: '', detail: '' })
+const addressFormLoading = ref(false)
+
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
   visible: false,
@@ -268,11 +279,107 @@ function handleAddToCartFromDetail() {
 }
 
 // ---------- 立即购买 ----------
-function handleBuyNow() {
+async function handleBuyNow() {
   if (!detailProduct.value) return
+  // 添加到购物车（标记为选中）
   addToCart(detailProduct.value.id, detailQuantity.value)
-  closeDetail()
-  navigate('cart')
+  // 打开结算弹窗
+  checkoutVisible.value = true
+  await loadAddresses()
+}
+
+// ---------- 结算：加载地址 ----------
+async function loadAddresses() {
+  try {
+    const response = await fetch(`${API_BASE}/api/user/addresses`, {
+      headers: authHeaders(),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const data = await response.json()
+    addresses.value = data.addresses || data || []
+    const defaultAddr = addresses.value.find((a: any) => a.is_default)
+    if (defaultAddr) {
+      selectedAddressId.value = defaultAddr.id
+    } else if (addresses.value.length > 0) {
+      selectedAddressId.value = addresses.value[0].id
+    }
+  } catch {
+    showToast('加载地址失败', 'error')
+  }
+}
+
+function formatAddress(addr: any): string {
+  return `${addr.province}${addr.city}${addr.district}${addr.detail}`
+}
+
+// ---------- 结算：新增地址 ----------
+function toggleAddressForm() {
+  showAddressForm.value = !showAddressForm.value
+  if (showAddressForm.value) {
+    addressForm.value = { recipient: '', phone: '', province: '', city: '', district: '', detail: '' }
+  }
+}
+
+async function saveAddress() {
+  if (!addressForm.value.recipient || !addressForm.value.phone || !addressForm.value.detail) {
+    showToast('请填写完整收货信息', 'error')
+    return
+  }
+  addressFormLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/user/addresses`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(addressForm.value),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('地址添加成功')
+    showAddressForm.value = false
+    await loadAddresses()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '添加地址失败', 'error')
+  } finally {
+    addressFormLoading.value = false
+  }
+}
+
+// ---------- 结算：确认下单 ----------
+async function confirmDirectOrder() {
+  if (!selectedAddressId.value) {
+    showToast('请选择收货地址', 'error')
+    return
+  }
+  checkoutLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        address_id: selectedAddressId.value,
+        pay_method: payMethod.value,
+        remark: remark.value,
+      }),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('下单成功！')
+    checkoutVisible.value = false
+    closeDetail()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '下单失败', 'error')
+  } finally {
+    checkoutLoading.value = false
+  }
+}
+
+function closeCheckout() {
+  checkoutVisible.value = false
+  showAddressForm.value = false
 }
 
 // ---------- 收藏 / 取消收藏 ----------
@@ -586,6 +693,106 @@ onMounted(() => {
               </div>
               <div v-else class="pb-review-empty">暂无评论</div>
             </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 立即购买 - 确认订单弹窗 -->
+    <transition name="pb-fade">
+      <div v-if="checkoutVisible" class="pb-checkout-overlay" @click.self="closeCheckout">
+        <div class="pb-checkout-modal">
+          <div class="pb-checkout-header">
+            <h2>确认订单</h2>
+            <button class="pb-checkout-close" @click="closeCheckout">×</button>
+          </div>
+
+          <!-- 收货地址 -->
+          <div class="pb-checkout-section">
+            <div class="pb-checkout-section__title">收货地址</div>
+            <div v-if="addresses.length === 0 && !showAddressForm" class="pb-checkout-empty">
+              暂无收货地址，
+              <span class="pb-checkout-link" @click="toggleAddressForm">新增地址</span>
+            </div>
+            <div v-for="addr in addresses" :key="addr.id" :class="['pb-checkout-addr', { active: selectedAddressId === addr.id }]" @click="selectedAddressId = addr.id">
+              <input type="radio" :checked="selectedAddressId === addr.id" readonly />
+              <div class="pb-checkout-addr__info">
+                <span class="pb-checkout-addr__name">{{ addr.recipient }} {{ addr.phone }}</span>
+                <span v-if="addr.is_default" class="pb-checkout-addr__tag">默认</span>
+                <span class="pb-checkout-addr__detail">{{ formatAddress(addr) }}</span>
+              </div>
+            </div>
+            <button v-if="!showAddressForm && addresses.length > 0" class="pb-checkout-addaddr" @click="toggleAddressForm">+ 新增收货地址</button>
+
+            <!-- 新增地址表单 -->
+            <div v-if="showAddressForm" class="pb-checkout-addrform">
+              <div class="pb-checkout-addrform__row">
+                <input v-model="addressForm.recipient" placeholder="收货人姓名" />
+                <input v-model="addressForm.phone" placeholder="手机号" />
+              </div>
+              <div class="pb-checkout-addrform__row">
+                <input v-model="addressForm.province" placeholder="省" />
+                <input v-model="addressForm.city" placeholder="市" />
+                <input v-model="addressForm.district" placeholder="区/县" />
+              </div>
+              <input v-model="addressForm.detail" placeholder="详细地址" class="pb-checkout-addrform__full" />
+              <div class="pb-checkout-addrform__btns">
+                <button class="pb-checkout-btn--ghost" @click="toggleAddressForm">取消</button>
+                <button class="pb-checkout-btn--primary" :disabled="addressFormLoading" @click="saveAddress">
+                  {{ addressFormLoading ? '保存中...' : '保存地址' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 支付方式 -->
+          <div class="pb-checkout-section">
+            <div class="pb-checkout-section__title">支付方式</div>
+            <div class="pb-checkout-pay">
+              <label :class="['pb-checkout-pay__option', { active: payMethod === 'wechat' }]">
+                <input type="radio" value="wechat" v-model="payMethod" />
+                <span class="pb-checkout-pay__icon pb-checkout-pay__icon--wechat">微</span>
+                <span>微信支付</span>
+              </label>
+              <label :class="['pb-checkout-pay__option', { active: payMethod === 'alipay' }]">
+                <input type="radio" value="alipay" v-model="payMethod" />
+                <span class="pb-checkout-pay__icon pb-checkout-pay__icon--alipay">支</span>
+                <span>支付宝</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 订单备注 -->
+          <div class="pb-checkout-section">
+            <div class="pb-checkout-section__title">订单备注</div>
+            <input v-model="remark" class="pb-checkout-remark" placeholder="选填，给商家留言（如配送时间、发票信息等）" />
+          </div>
+
+          <!-- 订单摘要 -->
+          <div class="pb-checkout-section">
+            <div class="pb-checkout-section__title">订单摘要</div>
+            <div class="pb-checkout-summary">
+              <div class="pb-checkout-summary__row">
+                <span>商品数量</span>
+                <span>{{ detailQuantity }} 件</span>
+              </div>
+              <div class="pb-checkout-summary__row">
+                <span>商品总额</span>
+                <span>¥{{ formatPrice((detailProduct?.price || 0) * detailQuantity) }}</span>
+              </div>
+              <div class="pb-checkout-summary__row pb-checkout-summary__row--total">
+                <span>应付金额</span>
+                <span class="pb-checkout-summary__amount">¥{{ formatPrice((detailProduct?.price || 0) * detailQuantity) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 操作按钮 -->
+          <div class="pb-checkout-footer">
+            <button class="pb-checkout-btn--ghost" @click="closeCheckout">取消</button>
+            <button class="pb-checkout-btn--primary" :disabled="checkoutLoading || !selectedAddressId" @click="confirmDirectOrder">
+              {{ checkoutLoading ? '提交中...' : '确认下单' }}
+            </button>
           </div>
         </div>
       </div>
@@ -1379,5 +1586,284 @@ onMounted(() => {
   .pb-modal__spec-list {
     grid-template-columns: 1fr;
   }
+}
+
+/* ===== 立即购买结算弹窗 ===== */
+.pb-checkout-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.pb-checkout-modal {
+  width: min(520px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--bg, #fdfaf6);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.pb-checkout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line, #eee);
+}
+
+.pb-checkout-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--ink, #2a2520);
+}
+
+.pb-checkout-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--muted, #999);
+  font-size: 18px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.pb-checkout-close:hover {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.pb-checkout-section {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line, #eee);
+}
+
+.pb-checkout-section__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink, #2a2520);
+  margin-bottom: 12px;
+  padding-left: 10px;
+  border-left: 3px solid var(--brand, #d95f2d);
+}
+
+.pb-checkout-empty {
+  font-size: 13px;
+  color: var(--muted, #999);
+}
+
+.pb-checkout-link {
+  color: var(--brand, #d95f2d);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.pb-checkout-addr {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line, #eee);
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.pb-checkout-addr.active {
+  border-color: var(--brand, #d95f2d);
+  background: rgba(217, 95, 45, 0.04);
+}
+
+.pb-checkout-addr input[type="radio"] {
+  margin-top: 3px;
+  accent-color: var(--brand, #d95f2d);
+}
+
+.pb-checkout-addr__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pb-checkout-addr__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink, #2a2520);
+}
+
+.pb-checkout-addr__tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #fff;
+  background: var(--brand, #d95f2d);
+  margin-left: 6px;
+}
+
+.pb-checkout-addr__detail {
+  font-size: 12px;
+  color: var(--muted, #999);
+}
+
+.pb-checkout-addaddr {
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--brand, #d95f2d);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--brand, #d95f2d);
+  font-size: 13px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.pb-checkout-addrform {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pb-checkout-addrform__row {
+  display: flex;
+  gap: 8px;
+}
+
+.pb-checkout-addrform__row input,
+.pb-checkout-addrform__full {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #eee);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--panel, #fff);
+}
+
+.pb-checkout-addrform__btns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.pb-checkout-pay {
+  display: flex;
+  gap: 12px;
+}
+
+.pb-checkout-pay__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line, #eee);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.pb-checkout-pay__option.active {
+  border-color: var(--brand, #d95f2d);
+  background: rgba(217, 95, 45, 0.04);
+}
+
+.pb-checkout-pay__option input[type="radio"] {
+  accent-color: var(--brand, #d95f2d);
+}
+
+.pb-checkout-pay__icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pb-checkout-pay__icon--wechat {
+  background: #07c160;
+}
+
+.pb-checkout-pay__icon--alipay {
+  background: #1677ff;
+}
+
+.pb-checkout-remark {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #eee);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--panel, #fff);
+}
+
+.pb-checkout-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pb-checkout-summary__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--muted, #999);
+}
+
+.pb-checkout-summary__row--total {
+  padding-top: 8px;
+  border-top: 1px solid var(--line, #eee);
+  font-weight: 700;
+  color: var(--ink, #2a2520);
+}
+
+.pb-checkout-summary__amount {
+  color: var(--brand, #d95f2d);
+  font-size: 18px;
+}
+
+.pb-checkout-footer {
+  display: flex;
+  gap: 12px;
+  padding: 16px 24px;
+  justify-content: flex-end;
+}
+
+.pb-checkout-btn--ghost {
+  padding: 10px 24px;
+  border: 1px solid var(--line, #eee);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted, #999);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pb-checkout-btn--primary {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--brand, #d95f2d), var(--brand-dark, #b84a1e));
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pb-checkout-btn--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

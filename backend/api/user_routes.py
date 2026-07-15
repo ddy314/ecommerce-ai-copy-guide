@@ -720,7 +720,7 @@ def ask_question():
 
 @user_bp.post("/user/qa/stream")
 def qa_stream():
-    """SSE 流式问答 - 逐行推送回答"""
+    """SSE 流式问答 - LLM 真实流式输出，逐 token 推送"""
     user_payload, error = require_auth(request)
     if error:
         return jsonify(error), 401
@@ -734,36 +734,13 @@ def qa_stream():
 
     def generate():
         try:
-            result = rag_service.answer_question(
+            # 使用新的流式问答方法 - LLM 逐 token 输出
+            for event in rag_service.answer_question_stream(
                 question=question,
                 product_id=product_id,
                 user_id=user_payload["user_id"],
-            )
-
-            answer = result.get("answer", "")
-            product_info = result.get("product")
-            related = result.get("related_products", [])
-
-            # 先推送商品卡片数据
-            if product_info:
-                yield f"data: {json.dumps({'type': 'product', 'data': product_info}, ensure_ascii=False)}\n\n"
-                time.sleep(0.05)
-
-            if related:
-                yield f"data: {json.dumps({'type': 'related', 'data': related}, ensure_ascii=False)}\n\n"
-                time.sleep(0.05)
-
-            # 逐行推送回答文本
-            lines = answer.split("\n")
-            for i, line in enumerate(lines):
-                chunk = {"type": "text", "content": line}
-                if i < len(lines) - 1:
-                    chunk["content"] += "\n"
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                time.sleep(0.08)
-
-            # 推送完成信号
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"SSE问答失败: {e}", exc_info=True)
