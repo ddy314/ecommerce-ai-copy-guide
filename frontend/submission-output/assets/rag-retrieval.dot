@@ -1,0 +1,21 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.2, nodesep=0.34, ranksep=0.46, splines=ortho];
+  node [shape=box, style="rounded,filled", fontname="Noto Sans CJK SC", fontsize=12.5, color="#94A3B8", fillcolor="#FFFFFF", fontcolor="#17324D", margin="0.16,0.10"];
+  edge [color="#64748B", penwidth=1.5, arrowsize=0.72, fontname="Noto Sans CJK SC", fontsize=9.5];
+  q [label="用户问题", fillcolor="#DBEAFE", color="#2563EB"];
+  exact [label="① 精确商品名\nscore ≥ 3.0"];
+  core [label="② 核心关键词\n+ 分类约束"];
+  common [label="③ 通用关键词\n+ 分类约束"];
+  global [label="④ 全局检索\n分类加成"];
+  hit [label="最佳商品\n+ 评论 + 同类 Top5", fillcolor="#D1FAE5", color="#0F766E"];
+  fallback [label="无匹配兜底", fillcolor="#FEF3C7", color="#D97706"];
+  q -> exact;
+  exact -> hit [label="命中"];
+  exact -> core [label="未命中"];
+  core -> hit [label="命中"];
+  core -> common [label="未命中"];
+  common -> hit [label="命中"];
+  common -> global [label="未命中"];
+  global -> hit [label="命中"];
+  global -> fallback [label="无结果"];
+}
