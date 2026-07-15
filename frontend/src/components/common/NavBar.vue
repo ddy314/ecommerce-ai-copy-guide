@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { h } from 'vue'
-import { Avatar, Button, LayoutHeader, Menu, Space, TypographyText } from 'ant-design-vue'
 import {
-  CustomerServiceOutlined,
-  HomeOutlined,
-  LogoutOutlined,
-  RobotOutlined,
-  ShopOutlined,
-  UserOutlined,
-} from '@ant-design/icons-vue'
+  HomeIcon,
+  ShoppingBagIcon,
+  ChatBubbleLeftRightIcon,
+  UserIcon,
+  SparklesIcon,
+  ArrowRightOnRectangleIcon,
+} from '@heroicons/vue/24/outline'
+import { resolveAvatarUrl } from '../../utils/avatar'
 
 interface UserInfo {
   username: string
@@ -17,39 +16,79 @@ interface UserInfo {
   avatar?: string
 }
 
-const props = defineProps<{ userInfo: UserInfo; activePage: string }>()
+const props = defineProps<{
+  userInfo: UserInfo
+  activePage: string
+}>()
+
 const emit = defineEmits<{
   (e: 'select-page', page: string): void
   (e: 'logout'): void
 }>()
 
 const menu = [
-  { key: 'home', label: '首页', icon: () => h(HomeOutlined) },
-  { key: 'products', label: '商品浏览', icon: () => h(ShopOutlined) },
-  { key: 'customer-service', label: '客服咨询', icon: () => h(CustomerServiceOutlined) },
-  { key: 'profile', label: '个人中心', icon: () => h(UserOutlined) },
+  { key: 'home', name: '首页', icon: HomeIcon },
+  { key: 'products', name: '商品浏览', icon: ShoppingBagIcon },
+  { key: 'customer-service', name: '客服咨询', icon: ChatBubbleLeftRightIcon },
+  { key: 'profile', name: '个人中心', icon: UserIcon },
 ]
+
+function isActive(path: string) {
+  return props.activePage === path
+}
 </script>
 
 <template>
-  <LayoutHeader class="!sticky !top-0 !z-50 !flex !h-16 !items-center !border-b !border-slate-100 !bg-white !px-4 shadow-sm sm:!px-6">
-    <button class="mr-5 flex shrink-0 items-center gap-2 text-lg font-bold text-violet-700" @click="emit('select-page', 'home')">
-      <span class="grid h-9 w-9 place-items-center rounded-xl bg-violet-600 text-white"><RobotOutlined /></span>
-      <span class="hidden sm:inline">AI 电商助手</span>
-    </button>
-    <Menu
-      mode="horizontal"
-      :selected-keys="[activePage]"
-      :items="menu"
-      class="min-w-0 flex-1 !border-0"
-      @click="({ key }) => emit('select-page', String(key))"
-    />
-    <Space class="ml-4 shrink-0">
-      <Avatar :src="props.userInfo.avatar" class="!bg-violet-600">
-        {{ (props.userInfo.nickname || props.userInfo.username || 'U').charAt(0).toUpperCase() }}
-      </Avatar>
-      <TypographyText class="hidden lg:inline">{{ props.userInfo.nickname || props.userInfo.username }}</TypographyText>
-      <Button type="text" danger title="退出登录" @click="emit('logout')"><LogoutOutlined /></Button>
-    </Space>
-  </LayoutHeader>
+  <nav class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-primary-light/50 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-8">
+          <button
+            @click="emit('select-page', 'home')"
+            class="flex items-center space-x-2 text-xl font-bold bg-gradient-to-r from-primary to-primary-dark bg-clip-text text-transparent"
+          >
+            <SparklesIcon class="w-6 h-6 text-primary" />
+            <span>AI电商助手</span>
+          </button>
+          <div class="hidden md:flex space-x-1">
+            <button
+              v-for="item in menu"
+              :key="item.key"
+              @click="emit('select-page', item.key)"
+              :class="isActive(item.key)
+                ? 'text-primary bg-primary-light'
+                : 'text-gray-600 hover:text-primary hover:bg-primary-light/50'"
+              class="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200"
+            >
+              <component :is="item.icon" class="w-4 h-4" />
+              <span>{{ item.name }}</span>
+            </button>
+          </div>
+        </div>
+        <div class="flex items-center space-x-4">
+          <div class="flex items-center space-x-2 bg-white rounded-full pl-2 pr-3 py-1 shadow-sm border border-primary-light/50">
+            <img
+              v-if="props.userInfo.avatar"
+              :src="resolveAvatarUrl(props.userInfo.avatar)"
+              class="w-8 h-8 rounded-full object-cover"
+            />
+            <div
+              v-else
+              class="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-accent-blue flex items-center justify-center text-white text-xs font-bold"
+            >
+              {{ (props.userInfo.nickname || props.userInfo.username || 'U').charAt(0).toUpperCase() }}
+            </div>
+            <span class="text-sm text-gray-700 font-medium hidden sm:block">{{ props.userInfo.nickname || props.userInfo.username }}</span>
+          </div>
+          <button
+            @click="emit('logout')"
+            class="flex items-center space-x-1 text-sm text-red-500 hover:text-white hover:bg-red-500 px-3 py-1.5 rounded-full transition-all duration-200"
+          >
+            <ArrowRightOnRectangleIcon class="w-4 h-4" />
+            <span class="hidden sm:inline">退出</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </nav>
 </template>
