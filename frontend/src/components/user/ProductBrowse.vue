@@ -403,6 +403,12 @@ function formatSpecs(specs: ProductDetail['specs']): Array<[string, string]> {
 
 onMounted(() => {
   loadProducts()
+  // 安全兜底：从个人中心等页面跳转过来时，如果 targetProductId 仍存在则直接打开详情
+  if (targetProductId.value) {
+    const pid = targetProductId.value
+    targetProductId.value = null
+    openDetailById(pid)
+  }
 })
 </script>
 
@@ -442,9 +448,16 @@ onMounted(() => {
     <!-- 类目筛选 -->
     <div class="pb-categories">
       <button
+        :class="['pb-cat', { active: selectedCategory === '' }]"
+        @click="selectCategory('')"
+      >
+        全部
+        <span v-if="total" class="pb-cat__count">{{ total }}</span>
+      </button>
+      <button
         v-for="cat in categories"
         :key="cat"
-        :class="['pb-cat', { active: selectedCategory === cat || (!selectedCategory && cat === categories[0]) }]"
+        :class="['pb-cat', { active: selectedCategory === cat }]"
         @click="selectCategory(cat)"
       >
         {{ cat }}
