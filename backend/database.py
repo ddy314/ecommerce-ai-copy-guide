@@ -27,10 +27,10 @@ def _resolve_database_url() -> str:
     if configured_url.startswith("sqlite"):
         return configured_url
 
-    # 如果配置的是 PostgreSQL，检查 psycopg2 是否可用
+    # 如果配置的是 PostgreSQL，检查项目实际使用的 psycopg v3 驱动是否可用
     if configured_url.startswith("postgresql"):
         try:
-            import psycopg2  # noqa: F401
+            import psycopg  # noqa: F401
             # 尝试连接
             engine = create_engine(configured_url, pool_pre_ping=True)
             with engine.connect() as conn:
@@ -38,7 +38,7 @@ def _resolve_database_url() -> str:
             logger.info("使用 PostgreSQL 数据库")
             return configured_url
         except ImportError:
-            logger.warning("psycopg2 未安装，降级使用 SQLite: ./ecommerce_ai.db")
+            logger.warning("psycopg 未安装，降级使用 SQLite: ./ecommerce_ai.db")
             return "sqlite:///./ecommerce_ai.db"
         except Exception as e:
             logger.warning(f"PostgreSQL 连接失败 ({e})，降级使用 SQLite: ./ecommerce_ai.db")
