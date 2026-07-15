@@ -256,14 +256,18 @@ async function openDetailById(productId: number) {
   }
 }
 
-// 监听 AI 聊天的商品跳转
-watch(targetProductId, (newId) => {
-  if (newId) {
-    openDetailById(newId)
-    // 消费后重置，避免重复触发
-    targetProductId.value = null
-  }
-})
+// 监听外部跳转商品详情（收藏 / 浏览记录 / AI 聊天）
+watch(
+  targetProductId,
+  (newId) => {
+    if (newId) {
+      openDetailById(newId)
+      // 消费后重置，避免重复触发
+      targetProductId.value = null
+    }
+  },
+  { immediate: true },
+)
 
 // ---------- 加入购物车 ----------
 async function addToCart(productId: number, quantity: number = 1) {

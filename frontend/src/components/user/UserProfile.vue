@@ -651,7 +651,7 @@ onMounted(() => {
               v-for="item in favorites"
               :key="item.id"
               class="group bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-card hover:-translate-y-1 transition-all overflow-hidden cursor-pointer"
-              @click="navigateToProduct(item.id)"
+              @click="navigateToProduct(item.product_id || item.id)"
             >
               <div class="aspect-square bg-gray-100 overflow-hidden">
                 <img
@@ -689,7 +689,7 @@ onMounted(() => {
               v-for="item in history"
               :key="item.id"
               class="group bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-card hover:-translate-y-1 transition-all overflow-hidden cursor-pointer"
-              @click="navigateToProduct(item.id)"
+              @click="navigateToProduct(item.product_id || item.id)"
             >
               <div class="aspect-square bg-gray-100 overflow-hidden">
                 <img

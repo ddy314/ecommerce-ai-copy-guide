@@ -70,14 +70,12 @@ async function loadProduct(id: number) {
   }
 }
 
-async function send() {
-  const text = input.value.trim()
-  if (!text || sending.value) return
+async function sendMessage(content: string, productId?: number) {
+  if (!content.trim() || sending.value) return
   sending.value = true
-  input.value = ''
   try {
-    const payload: Record<string, unknown> = { content: text }
-    if (product.value) payload.product_id = product.value.id
+    const payload: Record<string, unknown> = { content: content.trim() }
+    if (productId) payload.product_id = productId
     const res = await fetch(`${API_BASE}/api/cs/messages`, {
       method: 'POST',
       headers: authHeaders(),
@@ -95,6 +93,17 @@ async function send() {
   }
 }
 
+async function send() {
+  const text = input.value.trim()
+  if (!text) return
+  input.value = ''
+  await sendMessage(text, product.value?.id)
+}
+
+async function sendProductInquiry(productId: number, productName: string) {
+  await sendMessage(`我想咨询这个商品：${productName}`, productId)
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (box.value) box.value.scrollTop = box.value.scrollHeight
@@ -103,10 +112,23 @@ function scrollToBottom() {
 
 watch(messages, scrollToBottom, { deep: true })
 
+// 监听从商品详情页「询问客服」跳转，自动发送商品咨询
+watch(
+  csProductId,
+  async (newId) => {
+    if (newId) {
+      await loadProduct(newId)
+      if (product.value) {
+        await sendProductInquiry(product.value.id, product.value.name)
+      }
+      // 消费后重置，避免重复触发
+      csProductId.value = null
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
-  if (csProductId?.value) {
-    loadProduct(csProductId.value)
-  }
   loadMessages()
   pollTimer = setInterval(loadMessages, 3000)
 })
