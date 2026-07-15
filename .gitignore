@@ -49,6 +49,7 @@ data/backups/
 instance/
 backend/uploads/*
 !backend/uploads/.gitkeep
+.docs/
 
 # Docker
 *.pid
