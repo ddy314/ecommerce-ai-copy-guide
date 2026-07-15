@@ -3,6 +3,7 @@
 当用户提问时，自动从数据库检索匹配商品、评论、同类商品，
 结合品牌知识库构建数据驱动的精准回答，而非模板回复。
 """
+
 from __future__ import annotations
 
 import json
@@ -11,7 +12,7 @@ import re
 from collections import Counter
 from typing import Optional
 
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_
 
 from backend.database import SessionLocal
 from backend.models.knowledge_base import KnowledgeEntry, QARecord
@@ -35,29 +36,171 @@ RECALL_PATH_WEIGHTS = {
 
 # ===== 分类关键词映射（用于精准分类检测，防止跨分类匹配）=====
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
-    "宠物用品": ["猫粮", "狗粮", "猫砂", "宠物窝", "猫罐头", "狗罐头", "猫条", "狗零食",
-                "宠物玩具", "猫爬架", "狗链", "牵引绳", "宠物衣服", "猫", "狗", "宠物",
-                "狗咬胶", "化毛膏", "营养膏", "宠物沐浴"],
-    "化妆品": ["口红", "面霜", "面膜", "精华液", "防晒霜", "粉底", "眼影", "散粉",
-              "乳液", "爽肤水", "卸妆", "彩妆", "护肤", "化妆品", "润唇膏", "腮红",
-              "香水", "洁面", "面霜", "抗皱", "美白", "保湿"],
-    "母婴用品": ["奶粉", "纸尿裤", "婴儿推车", "儿童玩具", "宝宝", "婴儿", "母婴",
-                "奶瓶", "辅食", "婴儿车", "安全座椅", "学步车", "婴儿床", "湿巾",
-                "幼儿", "新生儿", "孕妈"],
-    "数码电子": ["耳机", "手机", "键盘", "鼠标", "音箱", "蓝牙", "充电宝", "数据线",
-               "智能手表", "平板", "电脑", "数码", "摄像头", "路由器", "投影仪",
-               "手机壳", "充电器", "U盘", "显示器"],
-    "家居家电": ["台灯", "落地灯", "电风扇", "电水壶", "加湿器", "空气净化器",
-               "挂烫机", "吸尘器", "取暖器", "扫地机器人", "洗碗机", "烤箱",
-               "微波炉", "电饭煲", "空调", "冰箱", "洗衣机"],
-    "办公家具": ["办公椅", "人体工学椅", "升降桌", "书架", "文件柜", "电脑桌",
-               "会议桌", "办公桌", "书桌", "椅子", "职员椅"],
-    "服装服饰": ["T恤", "衬衫", "卫衣", "牛仔裤", "连衣裙", "羽绒服", "外套",
-               "裤子", "裙子", "毛衣", "风衣", "西装", "内衣", "袜子", "帽子"],
-    "户外运动": ["背包", "露营椅", "帐篷", "睡袋", "瑜伽垫", "哑铃", "跑步鞋",
-                "篮球", "足球", "羽毛球", "自行车", "滑板", "泳衣", "运动"],
-    "生活用品": ["保温杯", "水杯", "马克杯", "雨伞", "收纳盒", "毛巾",
-               "牙刷", "梳子", "镜子", "挂钩", "垃圾袋", "纸巾"],
+    "宠物用品": [
+        "猫粮",
+        "狗粮",
+        "猫砂",
+        "宠物窝",
+        "猫罐头",
+        "狗罐头",
+        "猫条",
+        "狗零食",
+        "宠物玩具",
+        "猫爬架",
+        "狗链",
+        "牵引绳",
+        "宠物衣服",
+        "猫",
+        "狗",
+        "宠物",
+        "狗咬胶",
+        "化毛膏",
+        "营养膏",
+        "宠物沐浴",
+    ],
+    "化妆品": [
+        "口红",
+        "面霜",
+        "面膜",
+        "精华液",
+        "防晒霜",
+        "粉底",
+        "眼影",
+        "散粉",
+        "乳液",
+        "爽肤水",
+        "卸妆",
+        "彩妆",
+        "护肤",
+        "化妆品",
+        "润唇膏",
+        "腮红",
+        "香水",
+        "洁面",
+        "面霜",
+        "抗皱",
+        "美白",
+        "保湿",
+    ],
+    "母婴用品": [
+        "奶粉",
+        "纸尿裤",
+        "婴儿推车",
+        "儿童玩具",
+        "宝宝",
+        "婴儿",
+        "母婴",
+        "奶瓶",
+        "辅食",
+        "婴儿车",
+        "安全座椅",
+        "学步车",
+        "婴儿床",
+        "湿巾",
+        "幼儿",
+        "新生儿",
+        "孕妈",
+    ],
+    "数码电子": [
+        "耳机",
+        "手机",
+        "键盘",
+        "鼠标",
+        "音箱",
+        "蓝牙",
+        "充电宝",
+        "数据线",
+        "智能手表",
+        "平板",
+        "电脑",
+        "数码",
+        "摄像头",
+        "路由器",
+        "投影仪",
+        "手机壳",
+        "充电器",
+        "U盘",
+        "显示器",
+    ],
+    "家居家电": [
+        "台灯",
+        "落地灯",
+        "电风扇",
+        "电水壶",
+        "加湿器",
+        "空气净化器",
+        "挂烫机",
+        "吸尘器",
+        "取暖器",
+        "扫地机器人",
+        "洗碗机",
+        "烤箱",
+        "微波炉",
+        "电饭煲",
+        "空调",
+        "冰箱",
+        "洗衣机",
+    ],
+    "办公家具": [
+        "办公椅",
+        "人体工学椅",
+        "升降桌",
+        "书架",
+        "文件柜",
+        "电脑桌",
+        "会议桌",
+        "办公桌",
+        "书桌",
+        "椅子",
+        "职员椅",
+    ],
+    "服装服饰": [
+        "T恤",
+        "衬衫",
+        "卫衣",
+        "牛仔裤",
+        "连衣裙",
+        "羽绒服",
+        "外套",
+        "裤子",
+        "裙子",
+        "毛衣",
+        "风衣",
+        "西装",
+        "内衣",
+        "袜子",
+        "帽子",
+    ],
+    "户外运动": [
+        "背包",
+        "露营椅",
+        "帐篷",
+        "睡袋",
+        "瑜伽垫",
+        "哑铃",
+        "跑步鞋",
+        "篮球",
+        "足球",
+        "羽毛球",
+        "自行车",
+        "滑板",
+        "泳衣",
+        "运动",
+    ],
+    "生活用品": [
+        "保温杯",
+        "水杯",
+        "马克杯",
+        "雨伞",
+        "收纳盒",
+        "毛巾",
+        "牙刷",
+        "梳子",
+        "镜子",
+        "挂钩",
+        "垃圾袋",
+        "纸巾",
+    ],
 }
 
 
@@ -122,7 +265,7 @@ class RAGService:
     ) -> list[dict]:
         """检索知识库中与问题最相关的条目"""
         with SessionLocal() as db:
-            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active == True)
+            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active)
             if product_id:
                 stmt = stmt.where(
                     or_(
@@ -152,9 +295,7 @@ class RAGService:
 
     # ===== 核心：智能问答 =====
 
-    def _load_user_history(
-        self, user_id: int | None, limit: int = 5
-    ) -> list[dict]:
+    def _load_user_history(self, user_id: int | None, limit: int = 5) -> list[dict]:
         """加载用户最近几轮问答历史，用于长对话上下文理解"""
         if not user_id:
             return []
@@ -180,9 +321,26 @@ class RAGService:
         """判断当前问题是否是对前文商品的指代/追问"""
         q = question.lower()
         follow_up_signals = [
-            "这个", "那个", "它", "这款", "那款", "这款商品", "那个商品",
-            "怎么样", "好不好", "哪个", "哪个好", "推荐哪个", "呢", "吗",
-            "还有吗", "还有别的", "别的", "其他的", "再", "更",
+            "这个",
+            "那个",
+            "它",
+            "这款",
+            "那款",
+            "这款商品",
+            "那个商品",
+            "怎么样",
+            "好不好",
+            "哪个",
+            "哪个好",
+            "推荐哪个",
+            "呢",
+            "吗",
+            "还有吗",
+            "还有别的",
+            "别的",
+            "其他的",
+            "再",
+            "更",
         ]
         # 问题很短（<=6 个中文字符）大概率是追问
         if len(question.strip()) <= 6:
@@ -352,15 +510,17 @@ class RAGService:
         # 构建相关推荐信息
         related_info = []
         for p in related_products[:5]:
-            related_info.append({
-                "id": p.id,
-                "name": p.name,
-                "price": p.price or 0,
-                "rating": p.rating or 5.0,
-                "category": p.category or "",
-                "image_url": p.image_url or "",
-                "brand": self._get_real_brand(p),
-            })
+            related_info.append(
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price or 0,
+                    "rating": p.rating or 5.0,
+                    "category": p.category or "",
+                    "image_url": p.image_url or "",
+                    "brand": self._get_real_brand(p),
+                }
+            )
 
         # 构建主商品信息（供前端渲染可点击卡片）
         product_info = None
@@ -388,7 +548,7 @@ class RAGService:
         q_lower = question.lower()
         best_category = None
         best_score = 0
-        
+
         for category, keywords in CATEGORY_KEYWORDS.items():
             score = 0
             for kw in keywords:
@@ -398,7 +558,7 @@ class RAGService:
             if score > best_score:
                 best_score = score
                 best_category = category
-        
+
         # 只在有明确匹配时才返回分类
         if best_score >= 2:
             return best_category
@@ -417,9 +577,7 @@ class RAGService:
         primary_kws.sort(key=len, reverse=True)
         return primary_kws
 
-    def _extract_price_constraint(
-        self, question: str
-    ) -> tuple[float | None, float | None] | None:
+    def _extract_price_constraint(self, question: str) -> tuple[float | None, float | None] | None:
         """从问题中提取价格约束，返回 (min_price, max_price)
 
         支持：
@@ -510,26 +668,32 @@ class RAGService:
 
         # 1. 提取商品核心关键词（如"猫粮"、"口红"）
         primary_kws = self._extract_primary_keywords(question)
-        
+
         # 2. 检测分类
         detected_category = self._detect_category(question)
 
         # 3. 如果有核心关键词，优先用核心关键词搜索
         if primary_kws:
             conditions = [Product.name.ilike(f"%{kw}%") for kw in primary_kws]
-            
+
             if detected_category:
                 # 在正确分类内用核心关键词搜索
-                results = list(db.execute(
-                    select(Product).where(
-                        Product.category == detected_category,
-                        or_(*conditions),
-                    ).limit(50)
-                ).scalars().all())
+                results = list(
+                    db.execute(
+                        select(Product)
+                        .where(
+                            Product.category == detected_category,
+                            or_(*conditions),
+                        )
+                        .limit(50)
+                    )
+                    .scalars()
+                    .all()
+                )
             else:
-                results = list(db.execute(
-                    select(Product).where(or_(*conditions)).limit(50)
-                ).scalars().all())
+                results = list(
+                    db.execute(select(Product).where(or_(*conditions)).limit(50)).scalars().all()
+                )
 
             if results:
                 # 按核心关键词匹配度排序
@@ -541,6 +705,7 @@ class RAGService:
                             score += len(kw) * 5.0  # 核心关键词权重极高
                     score += (p.rating or 0) * 0.1
                     return score
+
                 results.sort(key=primary_score, reverse=True)
                 return results[0]
 
@@ -555,13 +720,20 @@ class RAGService:
             return None
 
         if detected_category:
-            results = list(db.execute(
-                select(Product).where(
-                    Product.category == detected_category,
-                    or_(*conditions),
-                ).limit(50)
-            ).scalars().all())
+            results = list(
+                db.execute(
+                    select(Product)
+                    .where(
+                        Product.category == detected_category,
+                        or_(*conditions),
+                    )
+                    .limit(50)
+                )
+                .scalars()
+                .all()
+            )
             if results:
+
                 def kw_score(p: Product) -> float:
                     score = 0.0
                     name_lower = (p.name or "").lower()
@@ -570,13 +742,14 @@ class RAGService:
                             score += len(kw) * 2.0
                     score += (p.rating or 0) * 0.1
                     return score
+
                 results.sort(key=kw_score, reverse=True)
                 return results[0]
 
         # 5. 全局搜索
-        all_results = list(db.execute(
-            select(Product).where(or_(*conditions)).limit(50)
-        ).scalars().all())
+        all_results = list(
+            db.execute(select(Product).where(or_(*conditions)).limit(50)).scalars().all()
+        )
         if not all_results:
             return None
 
@@ -639,9 +812,9 @@ class RAGService:
         # Path 3: 通用关键词全局召回
         if search_kws:
             conditions = [Product.name.ilike(f"%{kw}%") for kw in search_kws[:10]]
-            results = list(db.execute(
-                select(Product).where(or_(*conditions)).limit(50)
-            ).scalars().all())
+            results = list(
+                db.execute(select(Product).where(or_(*conditions)).limit(50)).scalars().all()
+            )
             for p in results:
                 name_lower = (p.name or "").lower()
                 score = sum(len(kw) * 2.0 for kw in search_kws if kw.lower() in name_lower)
@@ -651,17 +824,12 @@ class RAGService:
                 candidates.append((p, score, "general_keyword"))
 
         # Path 4: 品牌知识库触发商品召回
-        matched_brands = [
-            brand for brand in BRAND_KNOWLEDGE
-            if brand.lower() in q_lower
-        ]
+        matched_brands = [brand for brand in BRAND_KNOWLEDGE if brand.lower() in q_lower]
         if matched_brands:
-            brand_conditions = [
-                Product.name.ilike(f"%{brand}%") for brand in matched_brands
-            ]
-            results = list(db.execute(
-                select(Product).where(or_(*brand_conditions)).limit(30)
-            ).scalars().all())
+            brand_conditions = [Product.name.ilike(f"%{brand}%") for brand in matched_brands]
+            results = list(
+                db.execute(select(Product).where(or_(*brand_conditions)).limit(30)).scalars().all()
+            )
             for p in results:
                 score = 3.0 + (p.rating or 0) * 0.1
                 candidates.append((p, score, "brand_knowledge"))
@@ -669,7 +837,8 @@ class RAGService:
         # 价格约束：优先保留满足约束的候选；若无，则保留全部候选
         if price_constraint:
             filtered = [
-                (p, s, path) for p, s, path in candidates
+                (p, s, path)
+                for p, s, path in candidates
                 if self._matches_price_constraint(p.price, price_constraint)
             ]
             if filtered:
@@ -701,13 +870,10 @@ class RAGService:
                 product_scores[product.id] = (product, fused_score)
 
         # 排序并返回最佳商品
-        ranked = sorted(
-            product_scores.values(), key=lambda x: x[1], reverse=True
-        )
+        ranked = sorted(product_scores.values(), key=lambda x: x[1], reverse=True)
         best = ranked[0]
         logger.info(
-            f"Rerank 最佳商品: {best[0].name[:40]}, 融合得分={best[1]:.2f}, "
-            f"候选数={len(ranked)}"
+            f"Rerank 最佳商品: {best[0].name[:40]}, 融合得分={best[1]:.2f}, 候选数={len(ranked)}"
         )
         return best[0]
 
@@ -752,14 +918,10 @@ class RAGService:
             # 关键词重叠得分
             overlap_with_product = len(product_name_kws & p_name_kws)
             overlap_with_question = len(question_kws & p_name_kws)
-            core_match = sum(
-                3.0 for kw in core_kws if kw.lower() in (p.name or "").lower()
-            )
+            core_match = sum(3.0 for kw in core_kws if kw.lower() in (p.name or "").lower())
 
             # 价格约束满足度
-            price_match = 1.0 if self._matches_price_constraint(
-                p.price, price_constraint
-            ) else 0.0
+            price_match = 1.0 if self._matches_price_constraint(p.price, price_constraint) else 0.0
 
             # 综合得分
             score = (
@@ -773,29 +935,32 @@ class RAGService:
             scored.append((score, p))
 
         # 若存在满足价格约束的候选，优先只返回满足约束的
-        price_ok = [item for item in scored if self._matches_price_constraint(
-            item[1].price, price_constraint
-        )]
+        price_ok = [
+            item
+            for item in scored
+            if self._matches_price_constraint(item[1].price, price_constraint)
+        ]
         if price_ok:
             scored = price_ok
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in scored[:limit]]
 
-    def _retrieve_knowledge_context(
-        self, db, question: str, product: Product
-    ) -> str:
+    def _retrieve_knowledge_context(self, db, question: str, product: Product) -> str:
         """检索商品知识库并返回相关文本上下文"""
-        entries = list(db.execute(
-            select(KnowledgeEntry)
-            .where(
-                KnowledgeEntry.is_active == True,
-                or_(
-                    KnowledgeEntry.product_id == product.id,
-                    KnowledgeEntry.product_id.is_(None),
-                ),
+        entries = list(
+            db.execute(
+                select(KnowledgeEntry).where(
+                    KnowledgeEntry.is_active,
+                    or_(
+                        KnowledgeEntry.product_id == product.id,
+                        KnowledgeEntry.product_id.is_(None),
+                    ),
+                )
             )
-        ).scalars().all())
+            .scalars()
+            .all()
+        )
         if not entries:
             return ""
 
@@ -832,14 +997,52 @@ class RAGService:
 
         # 移除常见问答句式
         qa_patterns = [
-            r"多少钱", r"价格", r"贵不贵", r"便宜", r"划算", r"性价比",
-            r"怎么样", r"好不好", r"评价", r"评论", r"口碑", r"评分",
-            r"推荐", r"品牌", r"牌子", r"功能", r"效果", r"尺寸", r"规格",
-            r"退换", r"售后", r"保修", r"值不值得", r"值不值",
-            r"请问", r"一下", r"吗", r"呢", r"吧", r"啊",
-            r"这个", r"那个", r"这款", r"那款", r"了解",
-            r"介绍", r"告诉", r"知道", r"对比", r"比较",
-            r"？", r"\?", r"是", r"的", r"了", r"有",
+            r"多少钱",
+            r"价格",
+            r"贵不贵",
+            r"便宜",
+            r"划算",
+            r"性价比",
+            r"怎么样",
+            r"好不好",
+            r"评价",
+            r"评论",
+            r"口碑",
+            r"评分",
+            r"推荐",
+            r"品牌",
+            r"牌子",
+            r"功能",
+            r"效果",
+            r"尺寸",
+            r"规格",
+            r"退换",
+            r"售后",
+            r"保修",
+            r"值不值得",
+            r"值不值",
+            r"请问",
+            r"一下",
+            r"吗",
+            r"呢",
+            r"吧",
+            r"啊",
+            r"这个",
+            r"那个",
+            r"这款",
+            r"那款",
+            r"了解",
+            r"介绍",
+            r"告诉",
+            r"知道",
+            r"对比",
+            r"比较",
+            r"？",
+            r"\?",
+            r"是",
+            r"的",
+            r"了",
+            r"有",
         ]
         for pattern in qa_patterns:
             cleaned = re.sub(pattern, "", cleaned)
@@ -865,11 +1068,11 @@ class RAGService:
                 continue
             # 用 ilike 搜索名称包含该片段的商品
             try:
-                candidates = list(db.execute(
-                    select(Product).where(
-                        Product.name.ilike(f"%{name}%")
-                    ).limit(20)
-                ).scalars().all())
+                candidates = list(
+                    db.execute(select(Product).where(Product.name.ilike(f"%{name}%")).limit(20))
+                    .scalars()
+                    .all()
+                )
             except Exception:
                 continue
 
@@ -915,12 +1118,33 @@ class RAGService:
         text = question
         # 按疑问词分割，取最长的非疑问词片段
         split_patterns = [
-            r"多少钱", r"价格是多少", r"价格是", r"怎么样", r"好不好",
-            r"评价如何", r"口碑如何", r"推荐", r"品牌是",
-            r"功能是", r"效果是", r"是多少", r"贵不贵",
-            r"性价比", r"值不值得", r"值不值", r"划算吗",
-            r"请问", r"能告诉", r"告诉我", r"我想了解",
-            r"？", r"\?", r"吗", r"呢", r"啊", r"吧",
+            r"多少钱",
+            r"价格是多少",
+            r"价格是",
+            r"怎么样",
+            r"好不好",
+            r"评价如何",
+            r"口碑如何",
+            r"推荐",
+            r"品牌是",
+            r"功能是",
+            r"效果是",
+            r"是多少",
+            r"贵不贵",
+            r"性价比",
+            r"值不值得",
+            r"值不值",
+            r"划算吗",
+            r"请问",
+            r"能告诉",
+            r"告诉我",
+            r"我想了解",
+            r"？",
+            r"\?",
+            r"吗",
+            r"呢",
+            r"啊",
+            r"吧",
         ]
 
         fragments = [text]
@@ -941,7 +1165,10 @@ class RAGService:
 
         # 也尝试原始问题中提取连续的商品名词块
         # 商品名通常包含中文字符、英文字母、数字、空格和常见符号
-        raw_chunks = re.findall(r"[\u4e00-\u9fa5a-zA-Z0-9][\u4e00-\u9fa5a-zA-Z0-9\s\*\-\+\.\(\)（）mlMgLg克升片条个套装入包]*[\u4e00-\u9fa5a-zA-Z0-9)]", question)
+        raw_chunks = re.findall(
+            r"[\u4e00-\u9fa5a-zA-Z0-9][\u4e00-\u9fa5a-zA-Z0-9\s\*\-\+\.\(\)（）mlMgLg克升片条个套装入包]*[\u4e00-\u9fa5a-zA-Z0-9)]",
+            question,
+        )
         for chunk in raw_chunks:
             chunk = chunk.strip()
             if len(chunk) >= 6 and chunk not in candidates:
@@ -979,15 +1206,11 @@ class RAGService:
         elif q_type == "compare":
             return self._answer_compare(product, related, question)
         else:
-            return self._answer_general(
-                product, reviews, related, question, knowledge_context
-            )
+            return self._answer_general(product, reviews, related, question, knowledge_context)
 
     # ===== 各类型问题的回答构建 =====
 
-    def _answer_price(
-        self, product: Product, related: list[Product], question: str
-    ) -> str:
+    def _answer_price(self, product: Product, related: list[Product], question: str) -> str:
         """价格/性价比问题 - 用真实价格数据回答"""
         price = product.price or 0
         rating = product.rating or 5.0
@@ -999,7 +1222,9 @@ class RAGService:
             avg_price = sum(prices) / len(prices) if prices else 0
             min_price = min(prices) if prices else 0
             max_price = max(prices) if prices else 0
-            price_range = f"同类商品价格区间为 ¥{min_price:.0f} ~ ¥{max_price:.0f}，均价约 ¥{avg_price:.0f}"
+            price_range = (
+                f"同类商品价格区间为 ¥{min_price:.0f} ~ ¥{max_price:.0f}，均价约 ¥{avg_price:.0f}"
+            )
         else:
             price_range = ""
 
@@ -1015,7 +1240,9 @@ class RAGService:
             else:
                 value_assessment = f"定价 ¥{price:.0f}，处于同类商品正常价格区间，评分 {rating} 分，整体性价比合理。"
         else:
-            value_assessment = f"该商品定价 ¥{price:.0f}，评分 {rating} 分，累计 {review_count} 条评价。"
+            value_assessment = (
+                f"该商品定价 ¥{price:.0f}，评分 {rating} 分，累计 {review_count} 条评价。"
+            )
 
         parts = [value_assessment]
         if price_range:
@@ -1026,7 +1253,9 @@ class RAGService:
             cheaper = [p for p in related if (p.price or 0) < price]
             if cheaper:
                 best = cheaper[0]
-                parts.append(f"如果您预算有限，推荐看看「{best.name}」，仅需 ¥{best.price or 0:.0f}，评分 {best.rating or 5.0} 分。")
+                parts.append(
+                    f"如果您预算有限，推荐看看「{best.name}」，仅需 ¥{best.price or 0:.0f}，评分 {best.rating or 5.0} 分。"
+                )
 
         return "\n".join(parts)
 
@@ -1057,18 +1286,18 @@ class RAGService:
 
         # 推荐理由
         if rating >= 4.5 and review_count >= 10:
-            parts.append(f"\n推荐理由：这款商品评分和口碑都很出色，是同类中的热门选择。")
+            parts.append("\n推荐理由：这款商品评分和口碑都很出色，是同类中的热门选择。")
         elif price > 0 and related:
             avg_price = sum(p.price or 0 for p in related) / len(related) if related else price
             if price <= avg_price * 0.9:
-                parts.append(f"\n推荐理由：价格低于同类均价，性价比较高。")
+                parts.append("\n推荐理由：价格低于同类均价，性价比较高。")
             else:
-                parts.append(f"\n推荐理由：综合评分稳定，适合大多数用户选择。")
+                parts.append("\n推荐理由：综合评分稳定，适合大多数用户选择。")
 
         if related:
-            parts.append(f"\n下方还为您推荐了同分类的其他优质选择，可点击查看详情～")
+            parts.append("\n下方还为您推荐了同分类的其他优质选择，可点击查看详情～")
 
-        parts.append(f"\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
+        parts.append("\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
         return "\n".join(parts)
 
     def _get_real_brand(self, product: Product) -> str:
@@ -1078,7 +1307,7 @@ class RAGService:
             name = product.name or ""
             # 优先检查商品名开头部分（通常品牌在名称最前面）
             name_start = name[:20]  # 只检查前20个字符
-            
+
             # 先检查"/"分隔的品牌（如"EDIFIER/漫步者"）
             if "/" in name_start:
                 parts = name_start.split("/")
@@ -1086,16 +1315,14 @@ class RAGService:
                     for brand_key in BRAND_KNOWLEDGE:
                         if brand_key.lower() in part.lower():
                             return brand_key
-            
+
             # 再检查整个名称开头
             for brand_key in BRAND_KNOWLEDGE:
                 if brand_key.lower() in name_start.lower():
                     return brand_key
         return brand or "通用"
 
-    def _answer_brand(
-        self, product: Product, question: str
-    ) -> str:
+    def _answer_brand(self, product: Product, question: str) -> str:
         """品牌相关问题 - 从品牌知识库检索"""
         brand = self._get_real_brand(product)
 
@@ -1114,7 +1341,9 @@ class RAGService:
         if brand_info:
             parts.append(f"\n品牌介绍：{brand_info}")
         else:
-            parts.append(f"\n该品牌属于{product.category or '综合'}领域，这款产品定价 ¥{product.price or 0:.0f}，评分 {product.rating or 5.0} 分，累计 {product.review_count or 0} 条用户评价。")
+            parts.append(
+                f"\n该品牌属于{product.category or '综合'}领域，这款产品定价 ¥{product.price or 0:.0f}，评分 {product.rating or 5.0} 分，累计 {product.review_count or 0} 条用户评价。"
+            )
 
         # 添加评价总结
         rating = product.rating or 5.0
@@ -1148,14 +1377,29 @@ class RAGService:
             func_reviews = []
             for r in reviews[:10]:
                 content = r.content or ""
-                if any(kw in content for kw in ["功能", "效果", "好用", "方便", "实用", "体验", "质量", "做工", "材质"]):
+                if any(
+                    kw in content
+                    for kw in [
+                        "功能",
+                        "效果",
+                        "好用",
+                        "方便",
+                        "实用",
+                        "体验",
+                        "质量",
+                        "做工",
+                        "材质",
+                    ]
+                ):
                     func_reviews.append(f"  • {content[:80]}")
 
             if func_reviews:
-                parts.append(f"\n用户使用反馈：")
+                parts.append("\n用户使用反馈：")
                 parts.extend(func_reviews[:3])
 
-        parts.append(f"\n商品评分 {product.rating or 5.0} 分，{product.review_count or 0} 条评价，整体口碑{'优秀' if (product.rating or 0) >= 4.5 else '良好' if (product.rating or 0) >= 4.0 else '一般'}。")
+        parts.append(
+            f"\n商品评分 {product.rating or 5.0} 分，{product.review_count or 0} 条评价，整体口碑{'优秀' if (product.rating or 0) >= 4.5 else '良好' if (product.rating or 0) >= 4.0 else '一般'}。"
+        )
 
         return "\n".join(parts)
 
@@ -1175,17 +1419,20 @@ class RAGService:
             parts.append(f"规格参数：{product.specs}")
 
         # 从商品名提取尺寸信息
-        size_match = re.search(r'(\d+\.?\d*)\s*(cm|CM|厘米|mm|毫米|寸|英寸|kg|公斤|斤|L|升|ml|毫升|GB|TB|W|瓦)', product.name or "")
+        size_match = re.search(
+            r"(\d+\.?\d*)\s*(cm|CM|厘米|mm|毫米|寸|英寸|kg|公斤|斤|L|升|ml|毫升|GB|TB|W|瓦)",
+            product.name or "",
+        )
         if size_match:
             parts.append(f"从商品名称可见规格标识：{size_match.group(0)}")
 
-        parts.append(f"\n该商品属于{product.category or '综合'}分类，定价 ¥{product.price or 0:.0f}。如有具体尺寸疑问，可以在商品详情页查看完整的规格参数表。")
+        parts.append(
+            f"\n该商品属于{product.category or '综合'}分类，定价 ¥{product.price or 0:.0f}。如有具体尺寸疑问，可以在商品详情页查看完整的规格参数表。"
+        )
 
         return "\n".join(parts)
 
-    def _answer_review(
-        self, product: Product, reviews: list[Review], question: str
-    ) -> str:
+    def _answer_review(self, product: Product, reviews: list[Review], question: str) -> str:
         """评价/口碑问题 - 用真实评论回答"""
         parts = [f"「{product.name}」的用户评价总结："]
 
@@ -1276,19 +1523,17 @@ class RAGService:
         )
         return "\n".join(parts)
 
-    def _answer_compare(
-        self, product: Product, related: list[Product], question: str
-    ) -> str:
+    def _answer_compare(self, product: Product, related: list[Product], question: str) -> str:
         """比较问题 - 用同类商品数据对比"""
         parts = [f"为您对比「{product.name}」与同类商品："]
-        parts.append(f"\n当前商品：")
+        parts.append("\n当前商品：")
         parts.append(f"  • 名称：{product.name}")
         parts.append(f"  • 价格：¥{product.price or 0:.0f}")
         parts.append(f"  • 评分：{product.rating or 5.0} 分")
         parts.append(f"  • 评价数：{product.review_count or 0} 条")
 
         if related:
-            parts.append(f"\n同类对比：")
+            parts.append("\n同类对比：")
             for i, p in enumerate(related[:3], 1):
                 price_diff = ""
                 if product.price and p.price:
@@ -1338,18 +1583,18 @@ class RAGService:
             # 优先展示一条有内容的代表性评论
             best_review = max(reviews[:5], key=lambda r: len(r.content or "")) if reviews else None
             if best_review and best_review.content:
-                parts.append(f"\n用户评价摘录：")
+                parts.append("\n用户评价摘录：")
                 parts.append(f"  「{best_review.content[:100]}」")
 
         # 根据评分给出购买建议
         if rating >= 4.5 and review_count >= 10:
-            parts.append(f"\n综合来看，这款商品评分高、评价多，口碑不错，值得考虑～")
+            parts.append("\n综合来看，这款商品评分高、评价多，口碑不错，值得考虑～")
         elif rating >= 4.0:
-            parts.append(f"\n这款商品整体评价尚可，您可以根据自己的需求再对比看看。")
+            parts.append("\n这款商品整体评价尚可，您可以根据自己的需求再对比看看。")
         else:
-            parts.append(f"\n这款商品评分一般，建议您多看看评价细节后再做决定。")
+            parts.append("\n这款商品评分一般，建议您多看看评价细节后再做决定。")
 
-        parts.append(f"\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
+        parts.append("\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
         return "\n".join(parts)
 
     def _build_ai_fallback_answer(
@@ -1396,7 +1641,20 @@ class RAGService:
             return "recommend"
 
         # 价格类
-        if any(kw in q for kw in ["多少钱", "价格", "贵不贵", "便宜", "划算", "性价比", "预算", "值得", "值不值"]):
+        if any(
+            kw in q
+            for kw in [
+                "多少钱",
+                "价格",
+                "贵不贵",
+                "便宜",
+                "划算",
+                "性价比",
+                "预算",
+                "值得",
+                "值不值",
+            ]
+        ):
             return "price"
 
         # 品牌类
@@ -1409,7 +1667,9 @@ class RAGService:
                 return "brand"
 
         # 评价类
-        if any(kw in q for kw in ["评价", "评论", "口碑", "好评", "差评", "评分", "几分", "怎么样"]):
+        if any(
+            kw in q for kw in ["评价", "评论", "口碑", "好评", "差评", "评分", "几分", "怎么样"]
+        ):
             return "review"
 
         # 比较类
@@ -1417,11 +1677,43 @@ class RAGService:
             return "compare"
 
         # 尺寸类
-        if any(kw in q for kw in ["多高", "多大", "尺寸", "大小", "重量", "多重", "尺码", "码数", "规格", "容量"]):
+        if any(
+            kw in q
+            for kw in [
+                "多高",
+                "多大",
+                "尺寸",
+                "大小",
+                "重量",
+                "多重",
+                "尺码",
+                "码数",
+                "规格",
+                "容量",
+            ]
+        ):
             return "size"
 
         # 功能类
-        if any(kw in q for kw in ["功能", "作用", "怎么用", "使用", "操作", "安装", "材质", "材料", "面料", "续航", "电池", "充电", "防水", "效果"]):
+        if any(
+            kw in q
+            for kw in [
+                "功能",
+                "作用",
+                "怎么用",
+                "使用",
+                "操作",
+                "安装",
+                "材质",
+                "材料",
+                "面料",
+                "续航",
+                "电池",
+                "充电",
+                "防水",
+                "效果",
+            ]
+        ):
             return "function"
 
         # 售后类
@@ -1432,27 +1724,90 @@ class RAGService:
 
     def _extract_keywords(self, text: str) -> list[str]:
         """提取关键词 - 基于分词片段和已知商品词汇表"""
-        stop_words = {"的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那", "什么", "怎么", "可以", "吗", "呢", "吧", "啊", "请问", "一下", "想", "需要", "这个", "那个", "哪个", "这种", "那种",
-                       "推荐", "一款", "知道", "告诉", "关于", "你好",
-                       "比较", "相对", "觉得", "认为", "感觉", "希望", "想要", "需要",
-                       "适合", "用来", "有没有", "能不能", "好不好", "怎么样"}
-        
+        stop_words = {
+            "的",
+            "了",
+            "是",
+            "在",
+            "我",
+            "有",
+            "和",
+            "就",
+            "不",
+            "人",
+            "都",
+            "一",
+            "一个",
+            "上",
+            "也",
+            "很",
+            "到",
+            "说",
+            "要",
+            "去",
+            "你",
+            "会",
+            "着",
+            "没有",
+            "看",
+            "好",
+            "自己",
+            "这",
+            "那",
+            "什么",
+            "怎么",
+            "可以",
+            "吗",
+            "呢",
+            "吧",
+            "啊",
+            "请问",
+            "一下",
+            "想",
+            "需要",
+            "这个",
+            "那个",
+            "哪个",
+            "这种",
+            "那种",
+            "推荐",
+            "一款",
+            "知道",
+            "告诉",
+            "关于",
+            "你好",
+            "比较",
+            "相对",
+            "觉得",
+            "认为",
+            "感觉",
+            "希望",
+            "想要",
+            "需要",
+            "适合",
+            "用来",
+            "有没有",
+            "能不能",
+            "好不好",
+            "怎么样",
+        }
+
         # 先用正则提取所有中文/英文/数字片段
         raw_segments = re.findall(r"[\u4e00-\u9fa5a-zA-Z0-9]+", text)
-        
+
         keywords = set()
         for seg in raw_segments:
             if len(seg) <= 1:
                 continue
             # 英文/数字直接加入
-            if re.match(r'^[a-zA-Z0-9]+$', seg):
+            if re.match(r"^[a-zA-Z0-9]+$", seg):
                 if seg.lower() not in stop_words:
                     keywords.add(seg)
                 continue
             # 中文：加入完整的分词片段（通常是有意义的词如"蓝牙耳机"、"性价比"）
             if seg not in stop_words:
                 keywords.add(seg)
-        
+
         # 额外匹配已知商品关键词表中的词
         all_category_kws = set()
         for kws in CATEGORY_KEYWORDS.values():
@@ -1460,15 +1815,17 @@ class RAGService:
         for kw in all_category_kws:
             if kw in text and len(kw) >= 2:
                 keywords.add(kw)
-        
+
         # 额外匹配品牌名
         for brand in BRAND_KNOWLEDGE:
             if brand.lower() in text.lower():
                 keywords.add(brand)
-        
+
         return list(keywords)
-    
-    def _calculate_similarity(self, question: str, question_keywords: list[str], entry: KnowledgeEntry) -> float:
+
+    def _calculate_similarity(
+        self, question: str, question_keywords: list[str], entry: KnowledgeEntry
+    ) -> float:
         """计算问题与知识条目的相似度"""
         score = 0.0
         entry_text = f"{entry.title} {entry.content}"
@@ -1492,7 +1849,12 @@ class RAGService:
     # ===== 知识库管理（保留原有功能） =====
 
     def add_knowledge(
-        self, product_id: int | None, category: str, title: str, content: str, keywords: list[str] | None = None
+        self,
+        product_id: int | None,
+        category: str,
+        title: str,
+        content: str,
+        keywords: list[str] | None = None,
     ) -> dict:
         with SessionLocal() as db:
             entry = KnowledgeEntry(
@@ -1508,8 +1870,13 @@ class RAGService:
             return entry.to_dict()
 
     def update_knowledge(
-        self, entry_id: int, product_id: int | None = None, category: str | None = None,
-        title: str | None = None, content: str | None = None, keywords: list[str] | None = None,
+        self,
+        entry_id: int,
+        product_id: int | None = None,
+        category: str | None = None,
+        title: str | None = None,
+        content: str | None = None,
+        keywords: list[str] | None = None,
     ) -> dict | None:
         with SessionLocal() as db:
             entry = db.get(KnowledgeEntry, entry_id)
@@ -1536,7 +1903,7 @@ class RAGService:
         keyword: str | None = None,
     ) -> list[dict]:
         with SessionLocal() as db:
-            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active == True)
+            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active)
             if product_id:
                 stmt = stmt.where(KnowledgeEntry.product_id == product_id)
             if category:
@@ -1547,7 +1914,8 @@ class RAGService:
             if keyword and keyword.strip():
                 kw = keyword.strip().lower()
                 result = [
-                    r for r in result
+                    r
+                    for r in result
                     if kw in (r.get("title") or "").lower()
                     or kw in (r.get("content") or "").lower()
                     or any(kw in (k or "").lower() for k in (r.get("keywords") or []))
@@ -1557,7 +1925,7 @@ class RAGService:
     def list_knowledge_categories(self) -> list[str]:
         """返回知识库中所有不重复的知识类型"""
         with SessionLocal() as db:
-            stmt = select(KnowledgeEntry.category).distinct().where(KnowledgeEntry.is_active == True)
+            stmt = select(KnowledgeEntry.category).distinct().where(KnowledgeEntry.is_active)
             rows = list(db.execute(stmt).scalars().all())
             return [r for r in rows if r]
 
