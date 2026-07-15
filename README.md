@@ -1,65 +1,70 @@
 # 电商 AI 商品文案生成与智能导购助手
 
-> 课程项目 - 基于真实电商数据的 AI 文案生成、智能导购、评论情感分析与直播脚本生成系统。
+> 课程项目 —— 基于真实电商数据的 AI 文案生成、智能导购、评论情感分析、直播脚本生成与订单客服管理系统。
+
+---
 
 ## 项目简介
 
-本项目是一个面向电商运营场景的 AI 助手系统，通过 Scrapy 爬虫从京东等购物平台抓取商品和评论数据，存储到 PostgreSQL 数据库，利用 Redis 缓存热点数据，接入 AI 大模型实现以下功能：
+本项目面向电商运营场景，通过 Scrapy 爬虫采集真实商品与评论数据，结合 PostgreSQL 持久化、Redis 缓存与 AI 大模型，为商家和用户提供一站式运营与购物体验：
 
-- 商品文案智能生成
-- 智能导购推荐
-- 评论情感分析
-- 直播脚本生成
-- 商品/订单/客服管理
+- **AI 文案生成**：标题、卖点、详情页文案、广告语一键生成
+- **智能导购问答**：基于商品知识库 + RAG 的数据驱动推荐
+- **评论情感分析**：情感分布、高频词、差评痛点、优化建议
+- **直播脚本生成**：按直播时长自动分段，含互动问题
+- **商家后台**：商品 / 订单 / 用户 / 客服 / 数据看板 / 知识库
+- **用户前台**：商品浏览、购物车、我的订单、收货地址、个人中心
+- **AI 客服**：用户随时咨询，商家端可实时回复并查看 AI 辅助回答
+
+系统默认使用 **Mock AI**，无需配置外部 API 即可完整演示；也支持一键接入 OpenAI 等真实模型。
+
+---
 
 ## 技术栈
 
 | 层次 | 技术 | 说明 |
 |------|------|------|
-| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS | 响应式单页应用 |
-| 后端 | Flask 3 + Pydantic 2 + SQLAlchemy 2 | RESTful API |
-| 数据库 | PostgreSQL 16 | 商品、评论、订单、用户等持久化 |
+| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS | 响应式单页应用，Composition API |
+| 后端 | Flask 3 + Pydantic 2 + SQLAlchemy 2 | RESTful API，自动降级 SQLite |
+| 数据库 | PostgreSQL 16 / SQLite | 主库 PostgreSQL，未启动时自动降级 |
 | 缓存 | Redis 7 | 热点数据缓存 |
-| 爬虫 | Scrapy 2 | 京东商品与评论爬取 |
-| AI | OpenAI API / Mock | 文案、分析、推荐、客服回复 |
+| 爬虫 | Scrapy 2 | 京东商品与评论数据采集 |
+| AI | OpenAI API / Mock AI | 文案、分析、推荐、客服 |
 | 部署 | Docker + Docker Compose | 一键编排后端依赖服务 |
+
+---
 
 ## 前置要求
 
-- **Windows / macOS / Linux**
-- **Python 3.11+**
-- **Node.js 18+**
-- **PostgreSQL 16** 与 **Redis 7**（可用 Docker 一键启动）
-- 可选：**Docker Desktop**（推荐零基础用户使用）
+- Windows / macOS / Linux
+- Python 3.11+
+- Node.js 18+
+- PostgreSQL 16 + Redis 7（推荐用 Docker 一键启动）
+- 可选：Docker Desktop（零基础推荐）
+
+---
 
 ## 快速开始
 
-### 方式一：Conda 本地运行（适合开发调试）
-
-> 如果你完全零基础，请按以下步骤从 0 开始配置。
+### 方式一：Conda 本地运行（推荐开发调试）
 
 #### 1. 安装 Miniconda
 
-1. 访问 [Miniconda 下载页](https://docs.conda.io/en/latest/miniconda.html)。
-2. 下载对应系统的 Python 3.11 安装包并安装。
-3. 安装完成后，打开 **Anaconda Prompt**（Windows）或终端（macOS/Linux）。
+访问 [Miniconda 下载页](https://docs.conda.io/en/latest/miniconda.html) 安装 Python 3.11 版本。
 
-#### 2. 创建并激活 Conda 环境
+#### 2. 创建并激活环境
 
 ```bash
 conda create -n ecommerce-ai python=3.11 -y
 conda activate ecommerce-ai
 ```
 
-#### 3. 下载项目代码
+#### 3. 拉取代码
 
 ```bash
-cd C:\Users\YourName\Desktop   # Windows 示例，可换成你的目录
 git clone https://github.com/ddy314/ecommerce-ai-copy-guide.git
 cd ecommerce-ai-copy-guide
 ```
-
-如果电脑没有安装 Git，也可以直接下载 GitHub 页面上的 ZIP 压缩包并解压。
 
 #### 4. 安装后端依赖
 
@@ -70,24 +75,22 @@ pip install -r requirements.txt
 #### 5. 配置环境变量
 
 ```bash
-# Windows（PowerShell）
+# Windows
 copy .env.example .env
 
 # macOS / Linux
 cp .env.example .env
 ```
 
-默认 `.env` 已配置好本地 PostgreSQL 与 Redis 地址，没有配置 AI Key 时会自动使用 Mock AI，功能完整可演示。
+默认 `.env` 已配置本地 PostgreSQL 与 Redis；未配置 AI Key 时自动使用 Mock AI。
 
 #### 6. 启动数据库与缓存（Docker）
-
-如果你已经安装 Docker：
 
 ```bash
 docker compose up postgres redis -d
 ```
 
-没有 Docker 的同学，需要本地安装 PostgreSQL 与 Redis，并修改 `.env` 中的连接地址。
+若无 Docker，请本地安装 PostgreSQL / Redis 并修改 `.env` 中的连接地址。
 
 #### 7. 初始化数据库
 
@@ -95,15 +98,17 @@ docker compose up postgres redis -d
 python -c "from backend.database import init_db; init_db()"
 ```
 
-#### 8. 启动后端服务
+该命令会自动建表，并为旧表结构追加缺失字段、规范化订单编号。
+
+#### 8. 启动后端
 
 ```bash
 python -m flask --app backend.app run --host=0.0.0.0 --port=8000
 ```
 
-#### 9. 启动前端服务
+#### 9. 启动前端
 
-再打开一个终端（同样需要 `conda activate ecommerce-ai`），执行：
+再开一个终端（同样需要 `conda activate ecommerce-ai`）：
 
 ```bash
 cd frontend
@@ -126,40 +131,33 @@ npm run dev
 
 ---
 
-### 方式二：Docker Compose 一键部署（推荐零基础用户）
+### 方式二：Docker Compose 一键部署
 
 #### 1. 安装 Docker Desktop
 
-- Windows/macOS：下载 [Docker Desktop](https://www.docker.com/products/docker-desktop) 并安装。
-- Linux：参考官方文档安装 Docker Engine 与 Docker Compose。
+- Windows/macOS：[Docker Desktop 下载](https://www.docker.com/products/docker-desktop)
+- Linux：安装 Docker Engine 与 Docker Compose
 
-#### 2. 配置环境变量
+#### 2. 配置并启动
 
 ```bash
 copy .env.example .env
-```
-
-#### 3. 构建并启动全部服务
-
-```bash
 docker compose --profile app up --build -d
 ```
 
-该命令会启动：
+启动服务：
 
 - `postgres`：PostgreSQL 数据库
 - `redis`：Redis 缓存
 - `backend`：Flask 后端服务
 
-#### 4. 初始化数据库
+#### 3. 初始化数据库
 
 ```bash
 docker compose exec backend python -c "from backend.database import init_db; init_db()"
 ```
 
-#### 5. 启动前端
-
-Docker Compose 目前主要编排后端依赖服务。前端开发服务器需要在本地启动：
+#### 4. 启动前端
 
 ```bash
 cd frontend
@@ -169,10 +167,10 @@ npm run dev
 
 访问 http://localhost:5173 即可使用。
 
-#### 6. 常用 Docker 命令
+#### 5. 常用命令
 
 ```bash
-# 查看服务状态
+# 查看状态
 docker compose ps
 
 # 查看后端日志
@@ -189,7 +187,7 @@ docker compose --profile app up --build -d
 
 ## 接入真实 AI 模型（可选）
 
-编辑项目根目录的 `.env` 文件：
+编辑项目根目录 `.env`：
 
 ```env
 AI_PROVIDER=openai
@@ -207,34 +205,42 @@ AI_BASE_URL=https://your-proxy.com/v1
 
 ### 1. 商品数据库
 - Scrapy 爬虫从京东抓取真实商品数据
-- 支持分类筛选、关键词搜索
-- 商品详情含价格、品牌、评分、评论数
+- 支持分类筛选、关键词搜索、分页加载
+- 商品详情含价格、品牌、评分、评论数、图片与视频
 
 ### 2. 文案智能生成
-- 基于 AI 自动生成标题、卖点、详情页文案、广告语
+- 自动生成标题、卖点、详情页文案、广告语
 - 支持多种语气：专业可信、轻松活泼、高端奢华、温馨亲切
+- 生成结果可编辑、下载 TXT
 
 ### 3. 智能导购
 - 根据用户需求、预算生成个性化推荐
 - 输出首推商品、推荐理由、备选商品
+- 支持商品知识库问答（RAG）
 
 ### 4. 评论情感分析
 - 支持手动输入、文件上传、从数据库加载评论
 - AI 分析情感分布、高频关键词、差评痛点、优化建议
-- 支持下载 TXT 报告
+- 支持 TXT 报告下载
 
 ### 5. 直播脚本生成
 - 根据商品信息和直播时长生成分段脚本
-- 输出开场引入、卖点讲解、互动转化、自动生成互动问题
+- 输出开场引入、卖点讲解、互动转化、互动问题
+- 支持下载 TXT
 
-### 6. 订单与售后管理
-- 商家端：订单搜索、分页展示、发货填写快递单号、取消订单、处理退换货
-- 用户端：我的订单、确认收货、评价、申请退换货、填写退货快递单号
+### 6. 商品与订单管理
+- 商家端：卡片式商品管理、订单搜索分页、发货填单、取消订单、处理退换货
+- 用户端：我的订单、确认收货、评价、申请退换货、填写退货单号
 
 ### 7. 客服管理
-- 用户可随时联系 AI 智能客服
-- 商家端查看会话列表、回复用户
-- AI 回复支持 Markdown 渲染
+- 用户端：随时联系 AI 智能客服
+- 商家端：会话列表、实时回复、AI 辅助回答、Markdown 渲染
+- 客服头像与商家/用户真实头像保持一致
+
+### 8. 用户/商家个人中心
+- 头像上传与资料编辑
+- 收货地址管理
+- 收藏、浏览记录、购物车、订单聚合展示
 
 ---
 
@@ -244,49 +250,49 @@ AI_BASE_URL=https://your-proxy.com/v1
 .
 ├── backend/                    # 后端服务
 │   ├── api/                    # API 路由
-│   │   ├── auth_routes.py
-│   │   ├── merchant_routes.py
-│   │   ├── user_routes.py
+│   │   ├── auth_routes.py      # 认证/头像上传
+│   │   ├── merchant_routes.py  # 商家管理
+│   │   ├── user_routes.py      # 用户前台
 │   │   ├── customer_service_routes.py
-│   │   └── routes.py
+│   │   ├── routes.py           # 核心 AI 能力
+│   │   └── crawl_routes.py     # 爬虫任务
 │   ├── models/                 # 数据库模型
 │   │   ├── product.py
 │   │   ├── review.py
-│   │   ├── shopping.py         # 购物车/订单模型
+│   │   ├── shopping.py         # 购物车/订单
 │   │   ├── user.py
-│   │   └── customer_service.py
+│   │   ├── customer_service.py
+│   │   └── knowledge_base.py
 │   ├── services/               # AI 服务层
 │   │   ├── ai_provider.py
 │   │   ├── ai_mock.py
 │   │   ├── openai_provider.py
 │   │   └── rag_service.py
-│   ├── database.py             # 数据库连接与迁移
+│   ├── database.py             # 数据库连接、降级、迁移
+│   ├── fastapi_app.py          # 用户下单等 FastAPI 接口
 │   ├── app.py                  # Flask 应用入口
 │   └── config.py               # 配置管理
 ├── crawler/                    # Scrapy 爬虫
-│   ├── spiders/
-│   ├── items.py
-│   ├── pipelines.py
-│   └── settings.py
 ├── frontend/                   # 前端应用
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── ProductList.vue
 │   │   │   ├── CopyGenerator.vue
-│   │   │   ├── GuideRecommender.vue
 │   │   │   ├── ReviewAnalyzer.vue
 │   │   │   ├── LiveScriptGenerator.vue
-│   │   │   ├── user/MyOrders.vue
-│   │   │   └── merchant/OrderManage.vue
+│   │   │   ├── GuideRecommender.vue
+│   │   │   ├── merchant/       # 商家后台组件
+│   │   │   └── user/           # 用户前台组件
+│   │   ├── utils/              # 工具函数
 │   │   ├── App.vue
 │   │   └── main.ts
 │   └── package.json
 ├── run_crawler.py              # 爬虫运行脚本
 ├── docker-compose.yml          # Docker 编排
-├── Dockerfile                  # 后端容器镜像
-├── requirements.txt            # Python 依赖
-├── .env.example                # 环境变量模板
-└── README.md
+├── Dockerfile
+├── requirements.txt
+├── .env.example
+├── README.md
+└── 项目技术文档.md
 ```
 
 ---
@@ -294,7 +300,7 @@ AI_BASE_URL=https://your-proxy.com/v1
 ## 运行爬虫（可选）
 
 ```bash
-# 爬取京东商品数据
+# 爬取商品数据
 python run_crawler.py products
 
 # 爬取指定商品评论
@@ -304,7 +310,7 @@ python run_crawler.py reviews 10001234,10005678
 python run_crawler.py all
 ```
 
-使用 Docker 时：
+Docker 环境：
 
 ```bash
 docker compose exec backend python run_crawler.py all
@@ -328,11 +334,15 @@ cd frontend && npm run build
 
 **Q：启动后端时报数据库连接错误？**
 
-A：请确认 PostgreSQL 已启动，且 `.env` 中的 `DATABASE_URL` 配置正确。如果未安装 PostgreSQL，可删除或留空 `DATABASE_URL`，后端会自动降级为 SQLite。
+A：请确认 PostgreSQL 已启动且 `.env` 中 `DATABASE_URL` 配置正确。未配置或连接失败时，系统会自动降级为 SQLite。
+
+**Q：头像上传成功但页面不显示？**
+
+A：后端返回相对路径 `/uploads/avatars/xxx.jpg`，前端已统一拼接 `API_BASE` 为完整 URL，请确认 `VITE_API_BASE_URL` 指向正确后端地址。
 
 **Q：前端页面空白或接口报错？**
 
-A：请确认后端服务已启动，并且 `frontend/.env` 或 `vite.config.ts` 中的代理配置指向 `http://localhost:8000`。
+A：确认后端已启动，并且 `frontend/.env` 或 `vite.config.ts` 中的代理指向 `http://localhost:8000`。
 
 **Q：AI 功能没有真实结果？**
 
@@ -342,4 +352,4 @@ A：默认使用 Mock AI。如需真实模型，请在 `.env` 中配置 `AI_PROV
 
 ## 许可证
 
-本课程项目仅供教学演示使用。
+MIT License

@@ -9,6 +9,7 @@ import {
   PencilIcon,
   CameraIcon,
 } from '@heroicons/vue/24/outline'
+import { resolveAvatarUrl } from '../../utils/avatar'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -185,11 +186,11 @@ onMounted(() => {
           <div class="relative inline-block mx-auto mb-4">
             <div class="w-28 h-28 rounded-full overflow-hidden border-4 border-primary-light shadow-lg mx-auto">
               <img
-                v-if="user.avatar"
-                :src="user.avatar"
-                alt="avatar"
-                class="w-full h-full object-cover"
-              />
+                  v-if="user.avatar"
+                  :src="resolveAvatarUrl(user.avatar)"
+                  alt="avatar"
+                  class="w-full h-full object-cover"
+                />
               <div
                 v-else
                 class="w-full h-full bg-gradient-to-br from-primary to-accent-blue flex items-center justify-center text-3xl font-bold text-white"

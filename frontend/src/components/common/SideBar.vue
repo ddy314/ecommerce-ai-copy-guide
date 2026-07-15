@@ -5,6 +5,7 @@ import {
   ArrowLeftOnRectangleIcon,
   UserCircleIcon,
 } from '@heroicons/vue/24/outline'
+import { resolveAvatarUrl } from '../../utils/avatar'
 
 interface UserInfo {
   username: string
@@ -75,8 +76,8 @@ async function handleAvatarChange(event: Event) {
     }
     const data = await response.json()
     emit('avatar-updated', data.avatar)
-  } catch {
-    // 静默失败，避免打断导航
+  } catch (e) {
+    alert(e instanceof Error ? e.message : '头像上传失败')
   } finally {
     avatarLoading.value = false
     if (input) input.value = ''
@@ -127,7 +128,7 @@ async function handleAvatarChange(event: Event) {
           <div class="relative w-10 h-10 cursor-pointer group" @click="triggerAvatarUpload">
             <img
               v-if="props.userInfo.avatar"
-              :src="props.userInfo.avatar"
+              :src="resolveAvatarUrl(props.userInfo.avatar)"
               class="w-10 h-10 rounded-full object-cover"
             />
             <div
