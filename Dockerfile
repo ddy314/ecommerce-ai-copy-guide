@@ -9,8 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN chmod +x /app/scripts/start-backend.sh
 
 EXPOSE 8000
 
-CMD ["/app/scripts/start-backend.sh"]
+CMD ["python", "-m", "flask", "--app", "backend.app", "run", "--host=0.0.0.0", "--port=8000"]

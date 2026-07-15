@@ -1,5 +1,4 @@
 """数据库连接与会话管理"""
-
 from __future__ import annotations
 
 import os
@@ -28,11 +27,10 @@ def _resolve_database_url() -> str:
     if configured_url.startswith("sqlite"):
         return configured_url
 
-    # 如果配置的是 PostgreSQL，检查项目实际使用的 psycopg v3 驱动是否可用
+    # 如果配置的是 PostgreSQL，检查 psycopg2 是否可用
     if configured_url.startswith("postgresql"):
         try:
-            import psycopg  # noqa: F401
-
+            import psycopg2  # noqa: F401
             # 尝试连接
             engine = create_engine(configured_url, pool_pre_ping=True)
             with engine.connect() as conn:
@@ -40,7 +38,7 @@ def _resolve_database_url() -> str:
             logger.info("使用 PostgreSQL 数据库")
             return configured_url
         except ImportError:
-            logger.warning("psycopg 未安装，降级使用 SQLite: ./ecommerce_ai.db")
+            logger.warning("psycopg2 未安装，降级使用 SQLite: ./ecommerce_ai.db")
             return "sqlite:///./ecommerce_ai.db"
         except Exception as e:
             logger.warning(f"PostgreSQL 连接失败 ({e})，降级使用 SQLite: ./ecommerce_ai.db")
@@ -105,7 +103,6 @@ def get_db_context() -> Session:
 def init_db() -> None:
     """创建所有表并执行兼容性迁移"""
     import backend.models  # noqa: F401
-
     Base.metadata.create_all(bind=engine)
     # 1. 先补齐所有缺失的数据库字段（避免后续数据迁移因字段不存在而失败）
     _add_password_plain_column()
@@ -115,6 +112,7 @@ def init_db() -> None:
     _add_order_extra_columns()
     _add_display_id_columns()
     _add_review_user_id_column()
+    _add_cs_sender_id_column()
     # 2. 数据迁移：将残留明文密码哈希化并清空明文
     _hash_existing_plain_passwords()
     # 3. 规范化已有订单编号
@@ -125,20 +123,15 @@ def _add_password_plain_column() -> None:
     """为已有 users 表添加 password_plain 字段（如果不存在）"""
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
         if "users" in inspector.get_table_names():
             columns = [c["name"] for c in inspector.get_columns("users")]
             if "password_plain" not in columns:
                 with engine.connect() as conn:
                     if DATABASE_URL.startswith("sqlite"):
-                        conn.execute(
-                            text("ALTER TABLE users ADD COLUMN password_plain VARCHAR(100)")
-                        )
+                        conn.execute(text("ALTER TABLE users ADD COLUMN password_plain VARCHAR(100)"))
                     else:
-                        conn.execute(
-                            text("ALTER TABLE users ADD COLUMN password_plain VARCHAR(100)")
-                        )
+                        conn.execute(text("ALTER TABLE users ADD COLUMN password_plain VARCHAR(100)"))
                     conn.commit()
                 logger.info("已为 users 表添加 password_plain 字段")
     except Exception as e:
@@ -152,7 +145,6 @@ def _add_display_id_columns() -> None:
 
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
 
         if "users" in inspector.get_table_names():
@@ -176,9 +168,7 @@ def _add_display_id_columns() -> None:
             from datetime import datetime
 
             user_updated = 0
-            users = (
-                db.query(User).filter((User.display_id.is_(None)) | (User.display_id == "")).all()
-            )
+            users = db.query(User).filter((User.display_id.is_(None)) | (User.display_id == "")).all()
             if users:
                 today = datetime.now().strftime("%Y%m%d")
                 base_user_count = db.query(User).filter(User.display_id.like(f"{today}%")).count()
@@ -189,11 +179,7 @@ def _add_display_id_columns() -> None:
                 logger.info(f"已回填 {user_updated} 个用户的 display_id")
 
             product_updated = 0
-            products = (
-                db.query(Product)
-                .filter((Product.display_id.is_(None)) | (Product.display_id == ""))
-                .all()
-            )
+            products = db.query(Product).filter((Product.display_id.is_(None)) | (Product.display_id == "")).all()
             if products:
                 base_product_count = db.query(Product).count()
                 for i, product in enumerate(products):
@@ -209,7 +195,6 @@ def _add_product_media_columns() -> None:
     """为已有 products 表添加 image_urls / videos 字段（如果不存在）"""
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
 
         if "products" in inspector.get_table_names():
@@ -236,7 +221,6 @@ def _add_review_media_columns() -> None:
     """为已有 reviews 表添加 image_urls / videos 字段（如果不存在）"""
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
 
         if "reviews" not in inspector.get_table_names():
@@ -265,7 +249,6 @@ def _add_order_extra_columns() -> None:
     """为已有 orders 表添加物流、售后与状态时间字段（如果不存在）"""
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
 
         if "orders" not in inspector.get_table_names():
@@ -278,6 +261,7 @@ def _add_order_extra_columns() -> None:
             col_defs = [
                 ("tracking_no", "VARCHAR(100)"),
                 ("return_tracking_no", "VARCHAR(100)"),
+                ("exchange_tracking_no", "VARCHAR(100)"),
                 ("return_status", "VARCHAR(20)"),
                 ("return_reason", "VARCHAR(500)"),
                 ("return_applied_at", "TIMESTAMP" if is_pg else "DateTime"),
@@ -303,7 +287,6 @@ def _add_product_published_column() -> None:
     """为已有 products 表添加 is_published 字段，并将现有 NULL 回填为 True"""
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
 
         if "products" not in inspector.get_table_names():
@@ -335,7 +318,6 @@ def _add_review_user_id_column() -> None:
     """为已有 reviews 表添加 user_id 字段（如果不存在）"""
     try:
         from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
 
         if "reviews" not in inspector.get_table_names():
@@ -349,6 +331,25 @@ def _add_review_user_id_column() -> None:
             logger.info("已为 reviews 表添加 user_id 字段")
     except Exception as e:
         logger.warning(f"添加 reviews.user_id 字段失败: {e}")
+
+
+def _add_cs_sender_id_column() -> None:
+    """为已有 customer_service_messages 表添加 sender_id 字段（如果不存在）"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        if "customer_service_messages" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("customer_service_messages")]
+        if "sender_id" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE customer_service_messages ADD COLUMN sender_id INTEGER"))
+                conn.commit()
+            logger.info("已为 customer_service_messages 表添加 sender_id 字段")
+    except Exception as e:
+        logger.warning(f"添加 customer_service_messages.sender_id 字段失败: {e}")
 
 
 def _hash_existing_plain_passwords() -> None:
@@ -446,11 +447,7 @@ def _normalize_order_numbers() -> None:
                 except Exception:
                     pass
 
-                ts = (
-                    order.created_at.strftime("%Y%m%d%H%M%S")
-                    if order.created_at
-                    else datetime.now().strftime("%Y%m%d%H%M%S")
-                )
+                ts = order.created_at.strftime("%Y%m%d%H%M%S") if order.created_at else datetime.now().strftime("%Y%m%d%H%M%S")
                 base = f"{ts}{display_id}"
                 seq = counters.get(base, 1)
                 while True:

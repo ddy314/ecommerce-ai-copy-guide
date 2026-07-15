@@ -6,7 +6,7 @@ import os
 import uuid
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request, send_from_directory, current_app
+from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import select
 from werkzeug.utils import secure_filename
 
@@ -16,6 +16,7 @@ from backend.services.auth_service import (
     hash_password,
     verify_password,
     create_token,
+    verify_token,
 )
 from backend.utils.helpers import generate_user_display_id
 
@@ -28,9 +29,33 @@ ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
 
 
-def _allowed_file(filename: str, allowed_extensions: set[str]) -> bool:
+# MIME 类型到标准扩展名的映射（用于无扩展名或扩展名异常时的兜底判断）
+_MIME_TO_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
+    "video/x-matroska": ".mkv",
+}
+
+
+def _extension_from_mime(content_type: str | None) -> str | None:
+    return _MIME_TO_EXT.get((content_type or "").lower().split(";")[0].strip())
+
+
+def _allowed_file(file, allowed_extensions: set[str]) -> bool:
+    """判断文件是否允许上传：优先扩展名，其次 MIME 类型。"""
+    filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
-    return ext in allowed_extensions
+    if ext in allowed_extensions:
+        return True
+    # 扩展名不在白名单时，根据 MIME 类型兜底判断
+    mime_ext = _extension_from_mime(file.content_type)
+    return mime_ext is not None and mime_ext in allowed_extensions
 
 
 def _ensure_upload_dir(subdir: str) -> str:
@@ -42,15 +67,31 @@ def _ensure_upload_dir(subdir: str) -> str:
     return path
 
 
+def _file_extension(file) -> str:
+    """获取文件的标准扩展名：优先文件名扩展名，其次 MIME 类型。"""
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext:
+        return ext
+    mime_ext = _extension_from_mime(file.content_type)
+    if mime_ext:
+        return mime_ext
+    return ""
+
+
 def _save_uploaded_file(file, subdir: str, allowed_extensions: set[str]) -> str:
     """保存上传文件，返回相对 URL 路径"""
     if not file or not file.filename:
         raise ValueError("未选择文件")
-    filename = secure_filename(file.filename)
-    if not _allowed_file(filename, allowed_extensions):
+    if not _allowed_file(file, allowed_extensions):
         raise ValueError(f"不支持的文件格式，支持: {', '.join(allowed_extensions)}")
 
-    ext = os.path.splitext(filename)[1].lower()
+    ext = _file_extension(file)
+    filename = secure_filename(file.filename)
+    # secure_filename 可能丢失扩展名，确保扩展名存在
+    if ext and not filename.lower().endswith(ext):
+        filename = f"{filename}{ext}"
+
     unique_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
     save_dir = _ensure_upload_dir(subdir)
     save_path = os.path.join(save_dir, unique_name)
@@ -281,10 +322,3 @@ def upload_avatar():
         return jsonify({"message": "头像上传成功", "avatar": avatar_url, "user": user.to_dict()})
 
 
-@auth_bp.get("/uploads/<path:filename>")
-def serve_upload(filename: str):
-    """提供上传文件访问"""
-    upload_folder = current_app.config.get("UPLOAD_FOLDER") or os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "uploads"
-    )
-    return send_from_directory(upload_folder, filename)
