@@ -281,37 +281,39 @@ async function send() {
                     加入购物车
                   </button>
                 </div>
-                <!-- 相关推荐 -->
-                <div v-if="msg.relatedProducts && msg.relatedProducts.length" class="mt-2 space-y-2">
-                  <div class="text-xs text-gray-400 text-left">相关推荐</div>
-                  <div
-                    v-for="rp in msg.relatedProducts"
-                    :key="rp.id"
-                    class="bg-white rounded-xl border border-primary-light/50 p-2 shadow-sm text-left flex items-center space-x-2 hover:border-primary transition-colors"
-                  >
-                    <div class="flex-1 min-w-0 cursor-pointer" @click="openProductDetail(rp.id)">
-                      <div class="flex items-center space-x-2">
+                <!-- 同分类其他优质选择 -->
+                <div v-if="msg.relatedProducts && msg.relatedProducts.length" class="mt-3 space-y-2">
+                  <div class="text-xs text-gray-500 text-left font-medium">同分类其他优质选择</div>
+                  <div class="space-y-2">
+                    <div
+                      v-for="rp in msg.relatedProducts"
+                      :key="rp.id"
+                      class="bg-white rounded-xl border border-primary-light/50 p-3 shadow-sm text-left hover:border-primary transition-colors cursor-pointer"
+                      @click="openProductDetail(rp.id)"
+                    >
+                      <div class="flex space-x-3">
                         <img
                           v-if="rp.image_url"
                           :src="rp.image_url"
-                          class="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+                          class="w-14 h-14 rounded-lg object-cover flex-shrink-0"
                         />
-                        <div v-else class="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center text-xs text-gray-400 flex-shrink-0">无图</div>
-                        <div class="min-w-0">
-                          <div class="text-xs font-medium text-gray-800 truncate">{{ rp.name }}</div>
-                          <div class="text-xs text-primary font-semibold">
-                            ¥{{ rp.price?.toFixed(2) || '--' }}
-                            <span v-if="rp.rating" class="ml-1 text-gray-400 font-normal">{{ rp.rating }}分</span>
+                        <div v-else class="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center text-xs text-gray-400 flex-shrink-0">暂无图片</div>
+                        <div class="flex-1 min-w-0">
+                          <div class="text-sm font-semibold text-gray-800 truncate">{{ rp.name }}</div>
+                          <div class="text-xs text-gray-500 mt-1">
+                            <span class="text-primary font-bold">¥{{ rp.price?.toFixed(2) || '--' }}</span>
+                            <span v-if="rp.rating" class="ml-2">{{ rp.rating }}分</span>
+                            <span v-if="rp.brand" class="ml-2 px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">{{ rp.brand }}</span>
                           </div>
                         </div>
                       </div>
+                      <button
+                        class="mt-2 w-full bg-primary text-white text-xs font-medium py-1.5 rounded-lg hover:bg-primary-dark transition-colors"
+                        @click.stop="addToCart(rp.id)"
+                      >
+                        加入购物车
+                      </button>
                     </div>
-                    <button
-                      class="shrink-0 px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-lg hover:bg-primary hover:text-white transition-colors"
-                      @click="addToCart(rp.id)"
-                    >
-                      加购
-                    </button>
                   </div>
                 </div>
               </div>
