@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import {
-  SparklesIcon,
-  ArrowLeftOnRectangleIcon,
-  UserCircleIcon,
-} from '@heroicons/vue/24/outline'
-import { resolveAvatarUrl } from '../../utils/avatar'
+import { h, ref } from 'vue'
+import { Avatar, Button, LayoutSider, Menu, Space, TypographyText, Upload, message } from 'ant-design-vue'
+import { LogoutOutlined, RobotOutlined, UploadOutlined } from '@ant-design/icons-vue'
+import type { Component } from 'vue'
+import type { UploadProps } from 'ant-design-vue'
 
 interface UserInfo {
   username: string
@@ -18,7 +16,7 @@ interface UserInfo {
 interface MenuItem {
   key: string
   name: string
-  icon: any
+  icon: Component
   desc?: string
 }
 
@@ -36,142 +34,79 @@ const emit = defineEmits<{
   (e: 'avatar-updated', avatar: string): void
 }>()
 
-function isActive(path: string) {
-  return props.activePage === path
-}
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-const avatarInput = ref<HTMLInputElement | null>(null)
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 const avatarLoading = ref(false)
 
-function authHeaders(): HeadersInit {
-  const token = localStorage.getItem('token')
-  return {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  }
-}
+const antMenuItems = () =>
+  props.menu.map((item) => ({
+    key: item.key,
+    icon: () => h(item.icon),
+    label: item.name,
+    title: item.desc || item.name,
+  }))
 
-function triggerAvatarUpload() {
-  avatarInput.value?.click()
-}
-
-async function handleAvatarChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
+const uploadAvatar: UploadProps['beforeUpload'] = async (file) => {
   avatarLoading.value = true
   try {
     const formData = new FormData()
     formData.append('file', file)
-
+    const token = localStorage.getItem('token')
     const response = await fetch(`${API_BASE}/api/auth/avatar`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: formData,
     })
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new Error(err.message || `HTTP ${response.status}`)
-    }
-    const data = await response.json()
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`)
     emit('avatar-updated', data.avatar)
-  } catch (e) {
-    alert(e instanceof Error ? e.message : '头像上传失败')
+    message.success('头像已更新')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '头像上传失败')
   } finally {
     avatarLoading.value = false
-    if (input) input.value = ''
   }
+  return false
 }
 </script>
 
 <template>
-  <aside class="w-64 min-h-screen flex flex-col bg-white text-gray-800 relative overflow-hidden border-r border-primary-light/50">
-    <!-- 装饰光晕 -->
-    <div class="absolute top-0 left-0 w-64 h-64 bg-primary/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
-    <div class="absolute bottom-0 right-0 w-64 h-64 bg-accent-blue/20 rounded-full blur-3xl translate-x-1/2 translate-y-1/2 pointer-events-none"></div>
-
-    <div class="p-6 relative z-10">
-      <div class="flex items-center space-x-3">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent-blue flex items-center justify-center shadow-lg shadow-primary/20">
-          <SparklesIcon class="w-5 h-5 text-white" />
-        </div>
-        <div>
-          <h1 class="text-lg font-bold text-gray-800">{{ title || '商家后台' }}</h1>
-          <p class="text-xs text-primary">{{ subtitle || 'AI电商运营管理中心' }}</p>
-        </div>
+  <LayoutSider width="256" theme="light" class="!sticky !top-0 !h-screen !border-r !border-slate-100">
+    <div class="flex h-full flex-col">
+      <div class="flex items-center gap-3 px-6 py-6">
+        <span class="grid h-11 w-11 place-items-center rounded-2xl bg-violet-600 text-xl text-white shadow-lg shadow-violet-200">
+          <RobotOutlined />
+        </span>
+        <span class="min-w-0">
+          <TypographyText strong class="block !text-base">{{ title || '商家后台' }}</TypographyText>
+          <TypographyText type="secondary" class="block truncate !text-xs">{{ subtitle || 'AI 电商运营中心' }}</TypographyText>
+        </span>
       </div>
-    </div>
 
-    <nav class="flex-1 px-4 space-y-1.5 relative z-10">
-      <button
-        v-for="item in menu"
-        :key="item.key"
-        @click="emit('select-page', item.key)"
-        :class="isActive(item.key)
-          ? 'bg-primary-light text-primary shadow-sm shadow-primary/10 translate-x-1'
-          : 'hover:bg-primary-light/50 hover:translate-x-1 text-gray-600 hover:text-primary'"
-        class="w-full text-left flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group"
-      >
-        <component :is="item.icon" class="w-5 h-5" :class="isActive(item.key) ? 'text-primary' : 'text-primary/70 group-hover:text-primary'" />
-        <div class="flex-1 min-w-0">
-          <span class="text-sm font-medium">{{ item.name }}</span>
-          <p v-if="item.desc" class="text-[11px] text-gray-400 truncate">{{ item.desc }}</p>
-        </div>
-        <div v-if="isActive(item.key)" class="ml-auto w-1.5 h-1.5 rounded-full bg-primary"></div>
-      </button>
-    </nav>
+      <Menu
+        mode="inline"
+        :selected-keys="[activePage]"
+        :items="antMenuItems()"
+        class="flex-1 !border-0 px-3"
+        @click="({ key }) => emit('select-page', String(key))"
+      />
 
-    <div class="p-4 relative z-10">
-      <div class="bg-page rounded-2xl p-4 border border-primary-light/50">
-        <div class="flex items-center space-x-3 mb-3">
-          <div class="relative w-10 h-10 cursor-pointer group" @click="triggerAvatarUpload">
-            <img
-              v-if="props.userInfo.avatar"
-              :src="resolveAvatarUrl(props.userInfo.avatar)"
-              class="w-10 h-10 rounded-full object-cover"
-            />
-            <div
-              v-else
-              class="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent-blue flex items-center justify-center text-sm font-bold text-white"
-            >
+      <div class="border-t border-slate-100 p-4">
+        <div class="mb-4 flex items-center gap-3 rounded-2xl bg-slate-50 p-3">
+          <Upload :show-upload-list="false" accept="image/*" :before-upload="uploadAvatar">
+            <Avatar :size="42" :src="props.userInfo.avatar" class="cursor-pointer !bg-violet-600">
               {{ (props.userInfo.nickname || props.userInfo.username || 'M').charAt(0).toUpperCase() }}
-            </div>
-            <div
-              class="absolute inset-0 rounded-full flex items-center justify-center text-[10px] font-medium text-white bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"
-            >
-              {{ avatarLoading ? '...' : '上传' }}
-            </div>
-            <input
-              ref="avatarInput"
-              type="file"
-              accept="image/*"
-              class="hidden"
-              @change="handleAvatarChange"
-            />
-          </div>
-          <div class="flex-1 min-w-0">
-            <div class="text-sm font-medium truncate">{{ props.userInfo.nickname || props.userInfo.username }}</div>
-            <div class="text-xs text-primary">商家管理员</div>
-          </div>
+            </Avatar>
+          </Upload>
+          <span class="min-w-0 flex-1">
+            <TypographyText strong class="block truncate">{{ props.userInfo.nickname || props.userInfo.username }}</TypographyText>
+            <TypographyText type="secondary" class="block !text-xs">商家管理员</TypographyText>
+          </span>
+          <Button type="text" :loading="avatarLoading" title="上传头像"><UploadOutlined /></Button>
         </div>
-        <div class="grid grid-cols-2 gap-2">
-          <button
-            @click="emit('select-page', 'profile')"
-            class="flex items-center justify-center space-x-1 text-primary hover:text-white hover:bg-primary rounded-xl py-2 text-sm transition-all duration-200"
-          >
-            <UserCircleIcon class="w-4 h-4" />
-            <span>个人中心</span>
-          </button>
-          <button
-            @click="emit('logout')"
-            class="flex items-center justify-center space-x-1 text-red-500 hover:text-white hover:bg-red-500 rounded-xl py-2 text-sm transition-all duration-200"
-          >
-            <ArrowLeftOnRectangleIcon class="w-4 h-4" />
-            <span>退出</span>
-          </button>
-        </div>
+        <Space direction="vertical" class="w-full">
+          <Button danger block @click="emit('logout')"><LogoutOutlined />退出登录</Button>
+        </Space>
       </div>
     </div>
-  </aside>
+  </LayoutSider>
 </template>

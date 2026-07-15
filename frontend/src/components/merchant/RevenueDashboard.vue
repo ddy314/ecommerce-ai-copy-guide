@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import * as XLSX from 'xlsx'
-import html2canvas from 'html2canvas'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 /** 携带鉴权头的请求头 */
 function authHeaders(extra: Record<string, string> = {}): HeadersInit {
@@ -283,7 +281,33 @@ function starRating(rating: number): string {
 }
 
 // ---------- 导出功能 ----------
-function exportTopProductsExcel() {
+type ExportRow = Record<string, string | number>
+
+async function saveWorkbook(
+  sheets: Array<{ name: string; rows: ExportRow[] }>,
+  filename: string,
+) {
+  const { default: writeExcelFile } = await import('write-excel-file/browser')
+  const workbookSheets = sheets
+    .filter(({ rows }) => rows.length > 0)
+    .map(({ name, rows }) => {
+      const keys = Object.keys(rows[0])
+      return {
+        sheet: name,
+        stickyRowsCount: 1,
+        columns: keys.map((key) => ({
+          width: Math.max(12, ...rows.map((row) => String(row[key] ?? '').length + 2)),
+        })),
+        data: [
+          keys.map((key) => ({ value: key, fontWeight: 'bold' as const })),
+          ...rows.map((row) => keys.map((key) => row[key] ?? '')),
+        ],
+      }
+    })
+  await writeExcelFile(workbookSheets).toFile(filename)
+}
+
+async function exportTopProductsExcel() {
   if (!sortedProducts.value.length) return
   const rows = sortedProducts.value.map((p, idx) => ({
     排名: idx + 1,
@@ -295,36 +319,34 @@ function exportTopProductsExcel() {
     评分: p.rating,
     流量指数: p.traffic_score,
   }))
-  const ws = XLSX.utils.json_to_sheet(rows)
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'TOP商品流量榜')
-  XLSX.writeFile(wb, `TOP商品流量榜_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  await saveWorkbook(
+    [{ name: 'TOP商品流量榜', rows }],
+    `TOP商品流量榜_${new Date().toISOString().slice(0, 10)}.xlsx`,
+  )
 }
 
-function exportDashboardExcel() {
+async function exportDashboardExcel() {
   if (!data.value) return
-  const wb = XLSX.utils.book_new()
+  const sheets: Array<{ name: string; rows: ExportRow[] }> = []
 
   // KPI
   const kpiRows = kpiCards.value.map((c) => ({ 指标: c.label, 数值: c.value, 说明: c.sub }))
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kpiRows), '核心指标')
+  sheets.push({ name: '核心指标', rows: kpiRows })
 
   // 日营收
   if (dailyRevenue.value.length) {
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(dailyRevenue.value.map((d) => ({ 日期: d.date, 营收: d.revenue }))),
-      '日营收趋势',
-    )
+    sheets.push({
+      name: '日营收趋势',
+      rows: dailyRevenue.value.map((d) => ({ 日期: d.date, 营收: d.revenue })),
+    })
   }
 
   // 日订单
   if (dailyOrders.value.length) {
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(dailyOrders.value.map((d) => ({ 日期: d.date, 订单数: d.count }))),
-      '日订单趋势',
-    )
+    sheets.push({
+      name: '日订单趋势',
+      rows: dailyOrders.value.map((d) => ({ 日期: d.date, 订单数: d.count })),
+    })
   }
 
   // 分类分布
@@ -334,7 +356,7 @@ function exportDashboardExcel() {
       商品数量: c.value,
       销量: categorySalesList.value[i]?.value ?? 0,
     }))
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), '分类分布')
+    sheets.push({ name: '分类分布', rows: catRows })
   }
 
   // TOP 商品
@@ -349,16 +371,17 @@ function exportDashboardExcel() {
       评分: p.rating,
       流量指数: p.traffic_score,
     }))
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(topRows), 'TOP商品')
+    sheets.push({ name: 'TOP商品', rows: topRows })
   }
 
-  XLSX.writeFile(wb, `数据看板_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  await saveWorkbook(sheets, `数据看板_${new Date().toISOString().slice(0, 10)}.xlsx`)
 }
 
 async function exportDashboardJpg() {
   const el = document.querySelector('.rd-page') as HTMLElement | null
   if (!el) return
   try {
+    const { default: html2canvas } = await import('html2canvas')
     const canvas = await html2canvas(el, {
       backgroundColor: '#ffffff',
       scale: 2,

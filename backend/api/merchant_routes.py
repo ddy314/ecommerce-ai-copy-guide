@@ -1,17 +1,15 @@
 """商家管理路由 - 商品CRUD + 知识库管理 + 问答统计 + 订单管理"""
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc
 
 from backend.database import SessionLocal
 from backend.models.product import Product
-from backend.models.review import Review
 from backend.models.user import User
 from backend.models.shopping import Order
 from backend.services.auth_service import require_merchant, hash_password
@@ -207,14 +205,8 @@ def list_merchant_products():
         for cat in all_categories:
             category_counts[cat] = repo.count(cat)
 
-        # 实际上架商品数（全量统计，不随分页变化）
-        published_count = len(list(db.execute(
-            select(Product).where(Product.is_published == True)
-        ).scalars().all()))
-
         return jsonify({
             "total": total,
-            "published_count": published_count,
             "page": page,
             "page_size": page_size,
             "total_pages": total_pages,
@@ -611,45 +603,17 @@ def merchant_cancel_order(order_id: int):
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 
-@merchant_bp.post("/merchant/orders/<int:order_id>/confirm-return")
-def merchant_confirm_return(order_id: int):
-    """商家确认退货并自动退款给用户"""
-    user, error = require_merchant(request)
-    if error:
-        return jsonify(error), 401
-
-    try:
-        with SessionLocal() as db:
-            order = db.get(Order, order_id)
-            if not order:
-                return jsonify({"error": "not_found", "message": "订单不存在"}), 404
-
-            if order.status != "returning" or order.return_status != "returning":
-                return jsonify({"error": "invalid_status", "message": f"当前状态({order.status}/{order.return_status})不可确认退货"}), 400
-
-            # 自动退款：标记售后完成，订单进入已退货状态
-            order.status = "returned"
-            order.return_status = "refunded"
-            order.return_completed_at = datetime.now()
-            db.commit()
-            db.refresh(order)
-            return jsonify({"message": "退货已确认，退款已自动处理", "order": order.to_dict()})
-    except Exception as e:
-        logger.error(f"确认退货失败: {e}", exc_info=True)
-        return jsonify({"error": "server_error", "message": str(e)}), 500
-
-
-@merchant_bp.post("/merchant/orders/<int:order_id>/confirm-exchange")
-def merchant_confirm_exchange(order_id: int):
-    """商家确认换货并填写新换货物快递单号，后续流程与普通发货一致"""
+@merchant_bp.post("/merchant/orders/<int:order_id>/complete-return")
+def merchant_complete_return(order_id: int):
+    """商家处理完成退换货"""
     user, error = require_merchant(request)
     if error:
         return jsonify(error), 401
 
     data = request.get_json(silent=True) or {}
-    tracking_no = (data.get("tracking_no") or "").strip()
-    if not tracking_no:
-        return jsonify({"error": "invalid_input", "message": "请填写新换货物的快递单号"}), 400
+    result_status = (data.get("result") or "refunded").strip()
+    if result_status not in ("refunded", "exchanged"):
+        result_status = "refunded"
 
     try:
         with SessionLocal() as db:
@@ -657,21 +621,17 @@ def merchant_confirm_exchange(order_id: int):
             if not order:
                 return jsonify({"error": "not_found", "message": "订单不存在"}), 404
 
-            if order.status != "returning" or order.return_status != "returning":
-                return jsonify({"error": "invalid_status", "message": f"当前状态({order.status}/{order.return_status})不可确认换货"}), 400
+            if order.status != "returning":
+                return jsonify({"error": "invalid_status", "message": f"当前状态({order.status})不可处理退换货"}), 400
 
-            # 换货视为重新发货，后续用户可正常确认收货
-            order.status = "shipped"
-            order.return_status = "exchanged"
-            order.exchange_tracking_no = tracking_no
-            order.tracking_no = tracking_no
-            order.shipped_at = datetime.now()
+            order.status = "returned"
+            order.return_status = result_status
             order.return_completed_at = datetime.now()
             db.commit()
             db.refresh(order)
-            return jsonify({"message": "换货已确认，新商品已发货", "order": order.to_dict()})
+            return jsonify({"message": "退换货已处理完成", "order": order.to_dict()})
     except Exception as e:
-        logger.error(f"确认换货失败: {e}", exc_info=True)
+        logger.error(f"处理退换货失败: {e}", exc_info=True)
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 
@@ -807,7 +767,7 @@ def delete_user(user_id: int):
         return jsonify(error), 401
 
     # 不能删除自己
-    if user_id == user.id:
+    if user_id == user["user_id"]:
         return jsonify({"error": "forbidden", "message": "不能删除自己的账号"}), 403
 
     with SessionLocal() as db:

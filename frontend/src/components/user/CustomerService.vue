@@ -14,7 +14,6 @@ interface CSMessage {
   id: number
   user_id: number
   product_id?: number
-  sender_id?: number
   sender_role: 'user' | 'merchant' | 'ai'
   content: string
   is_read: boolean
@@ -22,8 +21,6 @@ interface CSMessage {
   user_nickname?: string
   user_display_id?: string
   user_avatar_url?: string
-  merchant_nickname?: string
-  merchant_avatar_url?: string
   product_name?: string
   product_display_id?: string
 }
@@ -93,7 +90,7 @@ function senderLabel(role: string): string {
 
 function messageAvatar(msg: CSMessage): string {
   if (msg.sender_role === 'user') return resolveAvatarUrl(userInfo.value?.avatar)
-  if (msg.sender_role === 'merchant') return resolveAvatarUrl(msg.merchant_avatar_url || merchantInfo.value?.avatar)
+  if (msg.sender_role === 'merchant') return resolveAvatarUrl(merchantInfo.value?.avatar)
   return ''
 }
 

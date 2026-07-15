@@ -15,14 +15,12 @@ class CustomerServiceMessage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     product_id: Mapped[int] = mapped_column(Integer, ForeignKey("products.id"), nullable=True)
-    sender_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
-    sender_role: Mapped[str] = mapped_column(String(16), default="user")  # user / merchant / ai
+    sender_role: Mapped[str] = mapped_column(String(16), default="user")  # user / merchant
     content: Mapped[str] = mapped_column(Text, default="")
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
-    user = relationship("User", foreign_keys=[user_id])
-    sender = relationship("User", foreign_keys=[sender_id])
+    user = relationship("User")
     product = relationship("Product")
 
     def to_dict(self) -> dict:

@@ -13,15 +13,15 @@ def get_openapi_spec() -> dict:
         "info": {
             "title": "电商 AI 商品文案生成与智能导购助手 API",
             "description": "提供商品文案生成、智能导购推荐、评论情感分析和直播脚本生成能力",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "contact": {
                 "name": "课程项目团队"
             }
         },
         "servers": [
             {
-                "url": "http://localhost:8000",
-                "description": "本地开发服务器"
+                "url": "/",
+                "description": "当前服务"
             }
         ],
         "paths": {
@@ -39,7 +39,7 @@ def get_openapi_spec() -> dict:
                                         "properties": {
                                             "status": {"type": "string", "example": "ok"},
                                             "service": {"type": "string", "example": "ecommerce-ai-copy-guide"},
-                                            "version": {"type": "string", "example": "0.1.0"},
+                                            "version": {"type": "string", "example": "0.2.0"},
                                             "runtime": {"type": "object"}
                                         }
                                     }
@@ -399,7 +399,7 @@ SWAGGER_UI_HTML = """
 <body>
     <div class="header">
         <h1>🛍️ 电商 AI 商品文案生成与智能导购助手</h1>
-        <p>API 文档 | 版本 0.1.0</p>
+        <p>API 文档 | 版本 0.2.0</p>
     </div>
     <div id="swagger-ui"></div>
     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.10.5/swagger-ui-bundle.js"></script>

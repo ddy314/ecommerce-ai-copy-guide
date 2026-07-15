@@ -45,12 +45,10 @@ function selectPage(key: string) {
   activePage.value = key as UserPage
 }
 
-// 用于从 AI 聊天 / 个人中心跳转到特定商品详情
+// 用于从 AI 聊天跳转到特定商品详情
 const targetProductId = ref<number | null>(null)
 
 function navigateToProduct(productId: number) {
-  // 同时写入 sessionStorage，确保跨组件切换时目标 ID 不丢失
-  sessionStorage.setItem('targetProductId', String(productId))
   targetProductId.value = productId
   activePage.value = 'products'
 }

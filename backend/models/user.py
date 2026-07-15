@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, DateTime, Boolean
+from sqlalchemy import String, Integer, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -15,6 +15,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, comment="登录账号")
     password_hash: Mapped[str] = mapped_column(String(256), comment="密码哈希")
+    password_plain: Mapped[str] = mapped_column(String(100), nullable=True, comment="明文密码（仅管理查看）")
     nickname: Mapped[str] = mapped_column(String(100), nullable=True, comment="昵称")
     role: Mapped[str] = mapped_column(String(20), default="user", comment="角色: user/merchant")
     avatar: Mapped[str] = mapped_column(String(500), nullable=True, comment="头像URL")
@@ -36,6 +37,7 @@ class User(Base):
             "email": self.email,
             "is_active": self.is_active,
             "display_id": self.display_id or "",
+            "password": "",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
