@@ -57,3 +57,6 @@ backend/uploads/*
 # Local/generated delivery material and editor export caches
 docs/submission/
 .trae-html-share-packages/
+
+# Ignore all docs content
+docs/
