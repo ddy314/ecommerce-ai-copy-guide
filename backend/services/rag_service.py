@@ -261,6 +261,9 @@ class RAGService:
 
         q_type = self._detect_question_type(question)
 
+        # 提取价格约束（如 300元以内 -> (0, 300)）
+        price_constraint = self._extract_price_constraint(question)
+
         # 获取商品数据
         product: Optional[Product] = None
         related_products: list[Product] = []
@@ -274,7 +277,9 @@ class RAGService:
                     product = db.get(Product, effective_product_id)
                 else:
                     # 多路召回 + Rerank 选出最佳商品
-                    candidates = self._multi_path_recall_products(db, enriched_question)
+                    candidates = self._multi_path_recall_products(
+                        db, enriched_question, price_constraint=price_constraint
+                    )
                     # 如果有继承分类，优先在分类内排序
                     if inherited_category:
                         for i, (p, score, path) in enumerate(candidates):
@@ -295,19 +300,9 @@ class RAGService:
                         .all()
                     )
 
-                    # 获取同类推荐商品
-                    related_products = list(
-                        db.execute(
-                            select(Product)
-                            .where(
-                                Product.category == product.category,
-                                Product.id != product.id,
-                            )
-                            .order_by(Product.rating.desc())
-                            .limit(5)
-                        )
-                        .scalars()
-                        .all()
+                    # 获取高相关性的同类推荐商品
+                    related_products = self._get_related_products(
+                        db, product, enriched_question, price_constraint=price_constraint
                     )
 
                     # 检索商品知识库，获取相关上下文
@@ -356,7 +351,7 @@ class RAGService:
 
         # 构建相关推荐信息
         related_info = []
-        for p in related_products[:3]:
+        for p in related_products[:5]:
             related_info.append({
                 "id": p.id,
                 "name": p.name,
@@ -364,6 +359,7 @@ class RAGService:
                 "rating": p.rating or 5.0,
                 "category": p.category or "",
                 "image_url": p.image_url or "",
+                "brand": self._get_real_brand(p),
             })
 
         # 构建主商品信息（供前端渲染可点击卡片）
@@ -420,6 +416,81 @@ class RAGService:
         primary_kws = list(set(primary_kws))
         primary_kws.sort(key=len, reverse=True)
         return primary_kws
+
+    def _extract_price_constraint(
+        self, question: str
+    ) -> tuple[float | None, float | None] | None:
+        """从问题中提取价格约束，返回 (min_price, max_price)
+
+        支持：
+        - 300元以内 / 300以内 / 300以下 / 不到300 / 不超过300 / 预算300 -> max=300
+        - 300元以上 / 300以上 / 超过300 -> min=300
+        - 200-300元 / 200到300 / 200~300 / 200至300 -> min=200, max=300
+        - 300左右 / 300块钱左右 -> min=200, max=450（宽松约束）
+        """
+        q = question.lower()
+
+        # 1. 范围匹配：200-300、200到300、200~300、200至300
+        range_patterns = [
+            r"(\d+)\s*[\-~到至]\s*(\d+)\s*(?:元|块|块钱)?",
+            r"(\d+)\s*(?:元|块|块钱)\s*[\-~到至]\s*(\d+)\s*(?:元|块|块钱)?",
+        ]
+        for pattern in range_patterns:
+            match = re.search(pattern, q)
+            if match:
+                low = float(match.group(1))
+                high = float(match.group(2))
+                return (min(low, high), max(low, high))
+
+        # 2. 左右/大概/差不多
+        around_match = re.search(r"(\d+)\s*(?:元|块|块钱)?\s*(?:左右|大概|大约|差不多)", q)
+        if around_match:
+            price = float(around_match.group(1))
+            return (price * 0.67, price * 1.5)
+
+        # 3. 以内/以下/不到/不超过/预算
+        max_patterns = [
+            r"(?:预算|价格|价位|售价)?\s*(\d+)\s*(?:元|块|块钱)?\s*(?:以内|以下|之内|不到|不超过|最多|顶多|至多)",
+            r"(?:预算|价格|价位|售价)?\s*(?:不超过|不到|少于|小于|至多|最多|顶多)\s*(\d+)\s*(?:元|块|块钱)?",
+        ]
+        for pattern in max_patterns:
+            match = re.search(pattern, q)
+            if match:
+                return (0.0, float(match.group(1)))
+
+        # 4. 以上/超过/最少/至少
+        min_patterns = [
+            r"(\d+)\s*(?:元|块|块钱)?\s*(?:以上|之上|超过|多于|大于|最少|至少|起码)",
+            r"(?:超过|多于|大于|最少|至少|起码)\s*(\d+)\s*(?:元|块|块钱)?",
+        ]
+        for pattern in min_patterns:
+            match = re.search(pattern, q)
+            if match:
+                return (float(match.group(1)), None)
+
+        # 5. 单独数字 + 元/块/块钱（无明确方向），视为上限（如"300元的耳机"）
+        simple_match = re.search(r"(\d+)\s*(?:元|块|块钱)", q)
+        if simple_match:
+            return (0.0, float(simple_match.group(1)))
+
+        return None
+
+    def _matches_price_constraint(
+        self,
+        price: float | None,
+        price_constraint: tuple[float | None, float | None] | None,
+    ) -> bool:
+        """判断商品价格是否满足约束"""
+        if not price_constraint:
+            return True
+        if price is None:
+            return False
+        min_p, max_p = price_constraint
+        if min_p is not None and price < min_p:
+            return False
+        if max_p is not None and price > max_p:
+            return False
+        return True
 
     def _search_product_by_question(self, db, question: str) -> Optional[Product]:
         """从问题关键词搜索数据库中最匹配的商品 - 带分类精准过滤
@@ -526,7 +597,10 @@ class RAGService:
     # ===== 多路召回与 Rerank =====
 
     def _multi_path_recall_products(
-        self, db, question: str
+        self,
+        db,
+        question: str,
+        price_constraint: tuple[float | None, float | None] | None = None,
     ) -> list[tuple[Product, float, str]]:
         """多路召回候选商品
 
@@ -592,6 +666,16 @@ class RAGService:
                 score = 3.0 + (p.rating or 0) * 0.1
                 candidates.append((p, score, "brand_knowledge"))
 
+        # 价格约束：优先保留满足约束的候选；若无，则保留全部候选
+        if price_constraint:
+            filtered = [
+                (p, s, path) for p, s, path in candidates
+                if self._matches_price_constraint(p.price, price_constraint)
+            ]
+            if filtered:
+                # 满足价格约束的候选额外加分
+                candidates = [(p, s + 2.0, path) for p, s, path in filtered]
+
         return candidates
 
     def _rerank_best_product(
@@ -626,6 +710,77 @@ class RAGService:
             f"候选数={len(ranked)}"
         )
         return best[0]
+
+    def _get_related_products(
+        self,
+        db,
+        product: Product,
+        question: str,
+        price_constraint: tuple[float | None, float | None] | None = None,
+        limit: int = 5,
+    ) -> list[Product]:
+        """获取与主商品及用户问题高度相关的同类商品
+
+        排序依据：
+        1. 价格满足用户约束
+        2. 商品名与主商品/用户问题的关键词重叠度
+        3. 评分与评价数
+        """
+        # 基础条件：同分类、排除主商品
+        stmt = (
+            select(Product)
+            .where(
+                Product.category == product.category,
+                Product.id != product.id,
+            )
+            .limit(100)
+        )
+        candidates = list(db.execute(stmt).scalars().all())
+        if not candidates:
+            return []
+
+        # 提取主商品名和用户问题的关键词
+        product_name_kws = set(self._extract_keywords(product.name or ""))
+        question_kws = set(self._extract_keywords(question))
+        # 核心商品词：从分类关键词表中匹配到的词（如"耳机"）
+        core_kws = set(self._extract_primary_keywords(question))
+
+        scored = []
+        for p in candidates:
+            p_name_kws = set(self._extract_keywords(p.name or ""))
+
+            # 关键词重叠得分
+            overlap_with_product = len(product_name_kws & p_name_kws)
+            overlap_with_question = len(question_kws & p_name_kws)
+            core_match = sum(
+                3.0 for kw in core_kws if kw.lower() in (p.name or "").lower()
+            )
+
+            # 价格约束满足度
+            price_match = 1.0 if self._matches_price_constraint(
+                p.price, price_constraint
+            ) else 0.0
+
+            # 综合得分
+            score = (
+                overlap_with_product * 2.0
+                + overlap_with_question * 1.5
+                + core_match * 3.0
+                + price_match * 4.0
+                + (p.rating or 0) * 0.2
+                + min((p.review_count or 0), 1000) * 0.001
+            )
+            scored.append((score, p))
+
+        # 若存在满足价格约束的候选，优先只返回满足约束的
+        price_ok = [item for item in scored if self._matches_price_constraint(
+            item[1].price, price_constraint
+        )]
+        if price_ok:
+            scored = price_ok
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [p for _, p in scored[:limit]]
 
     def _retrieve_knowledge_context(
         self, db, question: str, product: Product
@@ -911,11 +1066,7 @@ class RAGService:
                 parts.append(f"\n推荐理由：综合评分稳定，适合大多数用户选择。")
 
         if related:
-            parts.append(f"\n同分类其他优质选择：")
-            for i, p in enumerate(related[:5], 1):
-                parts.append(
-                    f"  {i}. 「{p.name}」¥{p.price or 0:.0f} | {p.rating or 5.0}分 | {p.review_count or 0}条评价"
-                )
+            parts.append(f"\n下方还为您推荐了同分类的其他优质选择，可点击查看详情～")
 
         parts.append(f"\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
         return "\n".join(parts)
