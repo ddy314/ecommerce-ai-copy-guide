@@ -26,13 +26,19 @@ interface ChatMessage {
   relatedProducts?: ProductCard[]
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const navigateToProduct = inject<(productId: number) => void>('navigateToProduct', () => {})
 
 const open = ref(false)
 const input = ref('')
 const loading = ref(false)
+const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
+  visible: false,
+  message: '',
+  type: 'success',
+})
+let toastTimer: ReturnType<typeof setTimeout> | null = null
 const messages = ref<ChatMessage[]>([
   {
     role: 'assistant',
@@ -59,6 +65,32 @@ function openProductDetail(productId?: number) {
   if (!productId) return
   open.value = false
   navigateToProduct(productId)
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toast.value = { visible: true, message, type }
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toast.value.visible = false
+  }, 2500)
+}
+
+async function addToCart(productId?: number) {
+  if (!productId) return
+  try {
+    const response = await fetch(`${API_BASE}/api/user/cart`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ product_id: productId, quantity: 1 }),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('已加入购物车')
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '加入购物车失败', 'error')
+  }
 }
 
 function isEmptyLoadingMessage(idx: number): boolean {
@@ -168,8 +200,18 @@ async function send() {
   <div class="fixed bottom-6 right-6 z-50 flex flex-col items-end">
     <div
       v-if="open"
-      class="bg-white w-80 sm:w-96 h-[520px] rounded-2xl shadow-2xl flex flex-col border border-primary-light/50 mb-4 overflow-hidden modal-in"
+      class="bg-white w-80 sm:w-96 h-[520px] rounded-2xl shadow-2xl flex flex-col border border-primary-light/50 mb-4 overflow-hidden modal-in relative"
     >
+      <!-- Toast -->
+      <transition name="toast">
+        <div
+          v-if="toast.visible"
+          :class="['absolute top-3 left-1/2 -translate-x-1/2 z-10 px-4 py-2 rounded-full text-xs font-semibold shadow-lg', toast.type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white']"
+        >
+          {{ toast.message }}
+        </div>
+      </transition>
+
       <div class="bg-gradient-to-r from-primary to-accent-blue text-white px-5 py-4 flex justify-between items-center shrink-0">
         <div class="flex items-center space-x-2">
           <SparklesIcon class="w-5 h-5" />
@@ -214,23 +256,30 @@ async function send() {
                 <!-- 商品卡片 -->
                 <div
                   v-if="msg.product"
-                  class="mt-2 bg-white rounded-xl border border-primary-light/50 p-3 shadow-sm text-left cursor-pointer hover:border-primary transition-colors"
-                  @click="openProductDetail(msg.product?.id)"
+                  class="mt-2 bg-white rounded-xl border border-primary-light/50 p-3 shadow-sm text-left hover:border-primary transition-colors"
                 >
-                  <div class="flex space-x-3">
+                  <div class="flex space-x-3 cursor-pointer" @click="openProductDetail(msg.product?.id)">
                     <img
                       v-if="msg.product.image_url"
                       :src="msg.product.image_url"
                       class="w-16 h-16 rounded-lg object-cover flex-shrink-0"
                     />
+                    <div v-else class="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center text-xs text-gray-400 flex-shrink-0">暂无图片</div>
                     <div class="flex-1 min-w-0">
                       <div class="text-sm font-semibold text-gray-800 truncate">{{ msg.product.name }}</div>
                       <div class="text-xs text-gray-500 mt-1">
                         <span class="text-primary font-bold">¥{{ msg.product.price?.toFixed(2) || '--' }}</span>
                         <span v-if="msg.product.rating" class="ml-2">{{ msg.product.rating }}分</span>
+                        <span v-if="msg.product.brand" class="ml-2 px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">{{ msg.product.brand }}</span>
                       </div>
                     </div>
                   </div>
+                  <button
+                    class="mt-2 w-full bg-primary text-white text-xs font-medium py-1.5 rounded-lg hover:bg-primary-dark transition-colors"
+                    @click.stop="addToCart(msg.product?.id)"
+                  >
+                    加入购物车
+                  </button>
                 </div>
                 <!-- 相关推荐 -->
                 <div v-if="msg.relatedProducts && msg.relatedProducts.length" class="mt-2 space-y-2">
@@ -238,18 +287,31 @@ async function send() {
                   <div
                     v-for="rp in msg.relatedProducts"
                     :key="rp.id"
-                    class="bg-white rounded-xl border border-primary-light/50 p-2 shadow-sm text-left flex space-x-2 cursor-pointer hover:border-primary transition-colors"
-                    @click="openProductDetail(rp.id)"
+                    class="bg-white rounded-xl border border-primary-light/50 p-2 shadow-sm text-left flex items-center space-x-2 hover:border-primary transition-colors"
                   >
-                    <img
-                      v-if="rp.image_url"
-                      :src="rp.image_url"
-                      class="w-10 h-10 rounded-lg object-cover flex-shrink-0"
-                    />
-                    <div class="flex-1 min-w-0">
-                      <div class="text-xs font-medium text-gray-800 truncate">{{ rp.name }}</div>
-                      <div class="text-xs text-primary font-semibold">¥{{ rp.price?.toFixed(2) || '--' }}</div>
+                    <div class="flex-1 min-w-0 cursor-pointer" @click="openProductDetail(rp.id)">
+                      <div class="flex items-center space-x-2">
+                        <img
+                          v-if="rp.image_url"
+                          :src="rp.image_url"
+                          class="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+                        />
+                        <div v-else class="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center text-xs text-gray-400 flex-shrink-0">无图</div>
+                        <div class="min-w-0">
+                          <div class="text-xs font-medium text-gray-800 truncate">{{ rp.name }}</div>
+                          <div class="text-xs text-primary font-semibold">
+                            ¥{{ rp.price?.toFixed(2) || '--' }}
+                            <span v-if="rp.rating" class="ml-1 text-gray-400 font-normal">{{ rp.rating }}分</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
+                    <button
+                      class="shrink-0 px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-lg hover:bg-primary hover:text-white transition-colors"
+                      @click="addToCart(rp.id)"
+                    >
+                      加购
+                    </button>
                   </div>
                 </div>
               </div>
@@ -314,5 +376,15 @@ async function send() {
   left: -14px;
   color: #9B87F5;
   font-weight: bold;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-8px);
 }
 </style>
