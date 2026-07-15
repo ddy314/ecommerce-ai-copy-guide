@@ -1,0 +1,1056 @@
+# 电商 AI 商品文案生成与智能导购助手 — 技术文档
+
+> 本文档面向需要理解、维护或二次开发本项目的开发者，按前端、后端、AI 模块、部署等维度进行拆解，并包含真实代码片段与流程解析。
+
+---
+
+## 1. 项目概述
+
+本项目是一个面向电商运营场景的 AI 助手系统，核心能力包括：
+
+- 商品文案智能生成（标题、卖点、详情文案、广告语）
+- 智能导购推荐与问答（基于用户需求 / 预算 / 商品知识库）
+- 评论情感分析（情感分布、高频关键词、差评痛点、优化建议）
+- 直播脚本生成（按直播时长分段输出脚本与互动问题）
+- 商品 / 订单 / 客服 / 用户管理（商家端 + 用户端）
+
+系统默认使用 **Mock AI** 运行，不依赖外部 API 即可完整演示；同时预留 **OpenAI** 接入能力。
+
+---
+
+## 2. 技术栈
+
+| 层次 | 技术 | 说明 |
+|------|------|------|
+| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS | 响应式单页应用，组合式 API |
+| 后端 | Flask 3 + Pydantic 2 + SQLAlchemy 2 | RESTful API，类型校验 |
+| 数据库 | PostgreSQL 16 / SQLite | 主数据库，无 PG 时自动降级 SQLite |
+| 缓存 | Redis 7 | 商品、评论、分析结果缓存 |
+| 爬虫 | Requests + Beautiful Soup | 京东、苏宁商品与评论数据采集 |
+| AI | OpenAI API / Mock | 文案、分析、推荐、客服回复 |
+| 部署 | Docker + Docker Compose | 一键编排后端依赖服务 |
+
+---
+
+## 3. 项目结构
+
+```
+ecommerce-ai-copy-guide/
+├── backend/                    # 后端服务
+│   ├── api/                    # API 路由层
+│   │   ├── routes.py           # 核心 AI 能力路由
+│   │   ├── auth_routes.py      # 认证相关
+│   │   ├── merchant_routes.py  # 商家管理（商品/订单/用户/知识库）
+│   │   ├── user_routes.py      # 用户前台（购物车/订单/地址/客服）
+│   │   ├── customer_service_routes.py  # 客服会话
+│   │   └── crawl_routes.py     # 爬虫任务
+│   ├── models/                 # 数据库模型
+│   │   ├── product.py
+│   │   ├── review.py
+│   │   ├── shopping.py         # 购物车 / 订单
+│   │   ├── user.py
+│   │   ├── customer_service.py
+│   │   └── knowledge_base.py
+│   ├── services/               # 业务服务层
+│   │   ├── ai_provider.py      # AI 提供者抽象
+│   │   ├── ai_mock.py          # Mock AI 实现
+│   │   ├── openai_provider.py  # OpenAI 实现
+│   │   ├── rag_service.py      # RAG 增强问答
+│   │   └── auth_service.py     # 认证服务
+│   ├── repositories/           # 数据访问层
+│   ├── schemas/                # Pydantic 请求/响应模型
+│   ├── crawler/                # 轻量爬虫与后台任务管理
+│   ├── database.py             # 数据库连接、降级、迁移
+│   ├── cache.py                # Redis 缓存封装
+│   ├── config.py               # 环境配置
+│   └── app.py                  # 唯一后端入口（Flask）
+├── frontend/                   # 前端应用
+│   ├── src/
+│   │   ├── components/         # 页面组件
+│   │   │   ├── CopyGenerator.vue
+│   │   │   ├── ReviewAnalyzer.vue
+│   │   │   ├── LiveScriptGenerator.vue
+│   │   │   ├── user/MyOrders.vue
+│   │   │   └── merchant/OrderManage.vue
+│   │   ├── api.ts              # 前端 API 封装
+│   │   ├── App.vue             # 根组件（角色分流）
+│   │   └── main.ts             # 应用入口
+│   └── vite.config.ts
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+├── requirements-dev.txt       # 测试与静态检查依赖
+├── .env.example
+└── README.md
+```
+
+---
+
+## 4. 后端模块
+
+### 4.1 应用入口与蓝图注册
+
+[backend/app.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/app.py) 是 Flask 应用工厂，负责：
+
+1. 加载环境配置
+2. 初始化日志
+3. 注册全局错误处理与 CORS
+4. 初始化数据库
+5. 注册全部 Blueprint
+
+```python
+# backend/app.py
+def create_app(config: AppConfig | None = None) -> Flask:
+    app_config = config or AppConfig.from_env()
+    setup_logging(app_config)
+
+    app = Flask(__name__)
+    app.config["APP_CONFIG"] = app_config
+    app.config["UPLOAD_FOLDER"] = os.path.join(os.path.dirname(__file__), "uploads")
+    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
+    @app.get("/health")
+    def health() -> tuple[dict[str, object], int]:
+        return {
+            "status": "ok",
+            "service": "ecommerce-ai-copy-guide",
+            "version": "0.2.0",
+            "runtime": app_config.public_summary(),
+        }, 200
+
+    @app.after_request
+    def add_cors_headers(response):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+        return response
+
+    # 初始化数据库表
+    try:
+        init_db()
+    except Exception as e:
+        logger.warning(f"数据库初始化失败: {e}")
+
+    _create_default_users()
+
+    app.register_blueprint(api_bp, url_prefix="/api")
+    app.register_blueprint(auth_bp, url_prefix="/api")
+    app.register_blueprint(merchant_bp, url_prefix="/api")
+    app.register_blueprint(user_bp, url_prefix="/api")
+    app.register_blueprint(crawl_bp, url_prefix="/api")
+    app.register_blueprint(cs_bp, url_prefix="/api")
+    app.register_blueprint(docs_bp)
+    return app
+```
+
+### 4.2 配置管理
+
+[backend/config.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/config.py) 通过 dataclass 从环境变量读取配置：
+
+```python
+@dataclass(frozen=True)
+class AppConfig:
+    app_env: str = "development"
+    app_host: str = "0.0.0.0"
+    app_port: int = 8000
+    database_url: str = ""
+    redis_url: str = ""
+    ai_provider: str = ""
+    ai_model: str = ""
+
+    @classmethod
+    def from_env(cls) -> "AppConfig":
+        load_dotenv()
+        return cls(
+            app_env=os.getenv("APP_ENV", "development"),
+            app_host=os.getenv("APP_HOST", "0.0.0.0"),
+            app_port=int(os.getenv("APP_PORT", "8000")),
+            database_url=os.getenv("DATABASE_URL", ""),
+            redis_url=os.getenv("REDIS_URL", ""),
+            ai_provider=os.getenv("AI_PROVIDER", ""),
+            ai_model=os.getenv("AI_MODEL", ""),
+        )
+```
+
+### 4.3 数据库连接与自动降级
+
+[backend/database.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/database.py) 的核心逻辑：
+
+- 配置了 `DATABASE_URL` 且能连接 PostgreSQL → 使用 PostgreSQL
+- 未配置或连接失败 → 自动降级为 SQLite
+- 提供 `init_db()` 自动建表，并兼容旧表结构升级（添加字段）
+
+```python
+def _resolve_database_url() -> str:
+    configured_url = os.getenv("DATABASE_URL", "")
+
+    if not configured_url:
+        return "sqlite:///./ecommerce_ai.db"
+
+    if configured_url.startswith("sqlite"):
+        return configured_url
+
+    if configured_url.startswith("postgresql"):
+        try:
+            import psycopg2
+            engine = create_engine(configured_url, pool_pre_ping=True)
+            with engine.connect() as conn:
+                conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+            return configured_url
+        except Exception as e:
+            logger.warning(f"PostgreSQL 连接失败 ({e})，降级使用 SQLite")
+            return "sqlite:///./ecommerce_ai.db"
+
+    return configured_url
+
+
+def init_db() -> None:
+    import backend.models
+    Base.metadata.create_all(bind=engine)
+    _add_password_plain_column()
+    _add_display_id_columns()
+    _add_product_media_columns()
+    _add_order_logistics_columns()
+```
+
+### 4.4 数据模型
+
+#### 4.4.1 商品模型（Product）
+
+[backend/models/product.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/models/product.py) 存储商品基础信息、媒体、销量、评分等。
+
+#### 4.4.2 订单模型（Order）
+
+[backend/models/shopping.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/models/shopping.py) 中 `Order` 表扩展了物流与售后字段：
+
+```python
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_no: Mapped[str] = mapped_column(String(64), unique=True, comment="订单号")
+    user_id: Mapped[int] = mapped_column(Integer, comment="用户ID")
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+        comment="订单状态: pending/paid/shipped/completed/cancelled/returning/returned",
+    )
+    total_amount: Mapped[float] = mapped_column(Float, default=0, comment="总金额")
+    pay_method: Mapped[str] = mapped_column(String(20), nullable=True, comment="支付方式")
+    address_snapshot: Mapped[str] = mapped_column(Text, nullable=True, comment="收货地址快照(JSON)")
+    items_snapshot: Mapped[str] = mapped_column(Text, nullable=True, comment="商品快照(JSON)")
+    remark: Mapped[str] = mapped_column(String(500), nullable=True, comment="备注")
+    # 物流与售后
+    tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="发货快递单号")
+    return_tracking_no: Mapped[str] = mapped_column(String(100), nullable=True, comment="退货快递单号")
+    return_status: Mapped[str] = mapped_column(String(20), nullable=True, comment="售后状态")
+    return_reason: Mapped[str] = mapped_column(String(500), nullable=True, comment="退换货原因")
+    return_applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    return_completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    shipped_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+```
+
+### 4.5 核心 AI 路由
+
+[backend/api/routes.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/api/routes.py) 统一处理六大 AI 能力，使用 Pydantic 做参数校验，Redis 做缓存，数据库记录生成任务。
+
+```python
+# 文案生成：先查缓存，再调用 AI，最后写入缓存和任务表
+@api_bp.post("/copy/generate")
+def generate_copy():
+    payload = _parse_payload(CopyGenerationRequest)
+    if isinstance(payload, tuple):
+        return payload
+
+    cache_key = CacheService.copy_key(payload.product_name, payload.style)
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
+    result = service.generate_copy(payload)
+    response = CopyGenerationResponse(**result)
+    data = response.model_dump()
+
+    cache.set(cache_key, data, ttl=7200)
+
+    try:
+        with get_db_context() as db:
+            task = GenerationTask(
+                task_type="copy",
+                input_params=json.dumps(payload.model_dump(), ensure_ascii=False),
+                output_result=json.dumps(data, ensure_ascii=False),
+            )
+            db.add(task)
+    except Exception as e:
+        logger.warning(f"任务记录失败: {e}")
+
+    return jsonify(data)
+```
+
+### 4.6 商家订单管理
+
+[backend/api/merchant_routes.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/api/merchant_routes.py) 实现订单搜索、发货、取消、退换货处理：
+
+```python
+@merchant_bp.get("/merchant/orders")
+def merchant_list_orders():
+    """商家查看所有订单（支持状态筛选、关键词搜索、分页）"""
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 20))
+    status = request.args.get("status", "")
+    keyword = request.args.get("keyword", "").strip()
+
+    with SessionLocal() as db:
+        stmt = select(Order)
+        if status:
+            stmt = stmt.where(Order.status == status)
+
+        if keyword:
+            from sqlalchemy import or_
+            order_no_filter = Order.order_no.contains(keyword)
+            user_ids = [u.id for u in db.execute(
+                select(User).where(or_(User.username.contains(keyword), User.nickname.contains(keyword)))
+            ).scalars().all()]
+            user_filter = Order.user_id.in_(user_ids) if user_ids else None
+            filters = [order_no_filter]
+            if keyword.isdigit():
+                filters.append(Order.user_id == int(keyword))
+            if user_filter:
+                filters.append(user_filter)
+            stmt = stmt.where(or_(*filters))
+
+        total = len(list(db.execute(stmt).scalars().all()))
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        stmt = stmt.order_by(desc(Order.created_at)).offset((page - 1) * page_size).limit(page_size)
+        orders = list(db.execute(stmt).scalars().all())
+        # ... 补充用户名、状态统计、返回 JSON
+```
+
+发货接口强制要求填写快递单号：
+
+```python
+@merchant_bp.post("/merchant/orders/<int:order_id>/ship")
+def merchant_ship_order(order_id: int):
+    data = request.get_json(silent=True) or {}
+    tracking_no = (data.get("tracking_no") or "").strip()
+
+    if not tracking_no:
+        return jsonify({"error": "invalid_input", "message": "请填写快递单号"}), 400
+
+    with SessionLocal() as db:
+        order = db.get(Order, order_id)
+        if not order:
+            return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+        if order.status != "paid":
+            return jsonify({"error": "invalid_status", "message": "当前状态不可发货"}), 400
+
+        order.status = "shipped"
+        order.tracking_no = tracking_no
+        order.shipped_at = datetime.now()
+        db.commit()
+        return jsonify({"message": "发货成功", "order": order.to_dict()})
+```
+
+### 4.7 用户订单与售后
+
+[backend/api/user_routes.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/api/user_routes.py) 实现下单、支付、确认收货、退换货、填写退货单号：
+
+```python
+@user_bp.post("/user/orders/<int:order_id>/apply-return")
+def apply_return(order_id: int):
+    """用户申请退换货"""
+    data = request.get_json(silent=True) or {}
+    return_type = (data.get("return_type") or "return").strip()
+    reason = (data.get("reason") or "").strip()
+
+    if not reason:
+        return jsonify({"error": "invalid_input", "message": "请填写退换货原因"}), 400
+
+    with SessionLocal() as db:
+        order = db.get(Order, order_id)
+        if not order or order.user_id != user_payload["user_id"]:
+            return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+        if order.status in ("pending", "cancelled"):
+            return jsonify({"error": "invalid_status", "message": "当前订单状态不可申请退换货"}), 400
+
+        order.status = "returning"
+        order.return_status = "returning"
+        order.return_reason = f"[{'退货' if return_type == 'return' else '换货'}] {reason}"
+        order.return_applied_at = datetime.now()
+        db.commit()
+        return jsonify({"message": "退换货申请已提交", "order": order.to_dict()})
+
+
+@user_bp.post("/user/orders/<int:order_id>/return-tracking")
+def fill_return_tracking(order_id: int):
+    """用户填写退货快递单号"""
+    data = request.get_json(silent=True) or {}
+    tracking_no = (data.get("tracking_no") or "").strip()
+
+    if not tracking_no:
+        return jsonify({"error": "invalid_input", "message": "请填写退货快递单号"}), 400
+
+    with SessionLocal() as db:
+        order = db.get(Order, order_id)
+        if not order or order.user_id != user_payload["user_id"]:
+            return jsonify({"error": "not_found", "message": "订单不存在"}), 404
+        if order.status != "returning":
+            return jsonify({"error": "invalid_status", "message": "当前订单不在退换货中"}), 400
+
+        order.return_tracking_no = tracking_no
+        db.commit()
+        return jsonify({"message": "退货快递单号已提交", "order": order.to_dict()})
+```
+
+---
+
+## 5. AI 模块
+
+### 5.1 AI 提供者抽象
+
+[backend/services/ai_provider.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/services/ai_provider.py) 定义接口，并按环境变量选择实现：
+
+```python
+class AIProvider(ABC):
+    @abstractmethod
+    def generate_copy(self, payload: CopyGenerationRequest) -> dict: ...
+    @abstractmethod
+    def recommend(self, payload: GuideRecommendationRequest) -> dict: ...
+    @abstractmethod
+    def guide_qa(self, payload: GuideQARequest) -> dict: ...
+    @abstractmethod
+    def cross_recommend(self, payload: CrossRecommendRequest) -> dict: ...
+    @abstractmethod
+    def analyze_reviews(self, payload: ReviewAnalysisRequest) -> dict: ...
+    @abstractmethod
+    def generate_live_script(self, payload: LiveScriptRequest) -> dict: ...
+
+
+def get_ai_provider() -> AIProvider:
+    provider = os.getenv("AI_PROVIDER", "mock")
+    if provider == "openai":
+        from backend.services.openai_provider import OpenAIProvider
+        return OpenAIProvider()
+    else:
+        from backend.services.ai_mock import MockAIService
+        return MockAIService()
+```
+
+### 5.2 Mock AI 实现
+
+[backend/services/ai_mock.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/services/ai_mock.py) 基于规则、模板和情感词典实现全部功能。
+
+#### 5.2.1 情感词典
+
+```python
+POSITIVE_WORDS = {
+    "好", "好用", "舒服", "舒适", "推荐", "喜欢", "稳定", "清爽", "划算", "精致",
+    "快", "不错", "满意", "回购", "质量好", "性价比", "颜值", "包装", "物流快",
+}
+
+NEGATIVE_WORDS = {
+    "差", "差评", "慢", "贵", "坏", "退", "退货", "失望", "异味", "粗糙",
+    "卡", "卡顿", "垃圾", "假货", "破损", "裂", "掉色", "缩水", "不合适",
+}
+```
+
+#### 5.2.2 文案生成
+
+根据 `style` 选择模板，动态替换占位符：
+
+```python
+STYLE_TEMPLATES: dict[str, dict[str, Any]] = {
+    "简洁": {
+        "title_prefix": "", "title_suffix": "", "separator": " | ",
+        "slogan_pattern": "{product}，{point}。",
+        "detail_style": "直接", "tone_words": ["精选", "核心", "实用"],
+    },
+    "高端": {
+        "title_prefix": "", "title_suffix": " · 臻享版", "separator": " — ",
+        "slogan_pattern": "致敬不凡，{product}以{point}重新定义品质生活。",
+        "detail_style": "尊享", "tone_words": ["奢享", "臻选", "传世", "非凡"],
+    },
+    # ...
+}
+
+
+def generate_copy(self, payload: CopyGenerationRequest) -> dict[str, object]:
+    style = payload.style if payload.style in STYLE_TEMPLATES else "简洁"
+    template = STYLE_TEMPLATES[style]
+    points = payload.selling_points or self._infer_selling_points(payload.product_name, payload.category)
+    audience = payload.audience or "用户"
+
+    core_point = points[0] if points else payload.product_name
+    title = self._build_title(payload.product_name, core_point, audience, template)
+    selling_points = self._build_selling_points(points, template, audience)
+    detail_copy = self._build_detail_copy(payload.product_name, points, audience, template)
+    ad_slogan = template["slogan_pattern"].format(
+        product=payload.product_name, point=core_point, audience=audience,
+    )
+
+    return {
+        "product_name": payload.product_name,
+        "style": style,
+        "title": title,
+        "selling_points": selling_points,
+        "detail_copy": detail_copy,
+        "ad_slogan": ad_slogan,
+    }
+```
+
+#### 5.2.3 评论情感分析
+
+统计正负向词、分类吐槽点、输出优化建议：
+
+```python
+def analyze_reviews(self, payload: ReviewAnalysisRequest) -> dict[str, object]:
+    reviews = payload.reviews or []
+    total = len(reviews)
+    positive = 0
+    negative = 0
+    neutral = 0
+    keyword_counter = Counter()
+    pain_points = []
+    complaints = []
+
+    for review in reviews:
+        text = review.content if hasattr(review, "content") else str(review)
+        score = self._sentiment_score(text)
+        if score > 0:
+            positive += 1
+        elif score < 0:
+            negative += 1
+        else:
+            neutral += 1
+
+        # 提取关键词
+        for kw in KEYWORD_CATEGORIES:
+            if kw in text:
+                keyword_counter[kw] += 1
+
+        # 吐槽点分类
+        complaint = self._classify_complaint(text)
+        if complaint:
+            complaints.append(complaint)
+
+    # 优化建议
+    suggestions = self._build_suggestions(complaints, keyword_counter)
+
+    return {
+        "product_name": payload.product_name,
+        "total": total,
+        "sentiment": {"positive": positive, "neutral": neutral, "negative": negative},
+        "top_keywords": [k for k, _ in keyword_counter.most_common(10)],
+        "pain_points": pain_points,
+        "optimization_suggestions": suggestions,
+        "sentiment_detail": {
+            "positive_reviews": [...],
+            "negative_reviews": [...],
+            "complaints": complaints,
+        },
+    }
+```
+
+### 5.3 RAG 智能导购
+
+[backend/services/rag_service.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/services/rag_service.py) 负责：
+
+- 为商品自动构建知识库（FAQ、规格、卖点等）
+- 根据用户问题检索相关知识条目
+- 调用 AI 生成答案并记录 QA 历史
+
+典型调用链路：
+
+```
+用户提问 → RAGService.answer_question()
+    → 检索知识库（关键词 / 向量匹配）
+    → 组装 prompt（问题 + 相关知识 + 商品信息）
+    → 调用 AIProvider.guide_qa()
+    → 记录 QARecord
+    → 返回答案 + 关联商品
+```
+
+---
+
+## 6. 前端模块
+
+### 6.1 应用入口与角色分流
+
+[frontend/src/App.vue](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/frontend/src/App.vue) 根据登录角色切换商家后台或用户前台：
+
+```vue
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import Login from './components/Login.vue'
+import MerchantLayout from './components/merchant/MerchantLayout.vue'
+import UserLayout from './components/user/UserLayout.vue'
+
+type AppView = 'login' | 'merchant' | 'user'
+const currentView = ref<AppView>('login')
+const userInfo = ref<UserInfo | null>(null)
+
+onMounted(() => {
+  const stored = localStorage.getItem('userInfo')
+  if (stored) {
+    const info = JSON.parse(stored) as UserInfo
+    userInfo.value = info
+    currentView.value = info.role === 'merchant' ? 'merchant' : 'user'
+  }
+})
+
+function handleLoginSuccess(info: UserInfo) {
+  userInfo.value = info
+  currentView.value = info.role === 'merchant' ? 'merchant' : 'user'
+}
+</script>
+
+<template>
+  <Login v-if="currentView === 'login'" @login-success="handleLoginSuccess" />
+  <MerchantLayout v-else-if="currentView === 'merchant' && userInfo" :user-info="userInfo" @logout="handleLogout">
+    <template #default="{ page }">
+      <RevenueDashboard v-if="page === 'dashboard'" />
+      <ProductManage v-else-if="page === 'products'" />
+      <OrderManage v-else-if="page === 'orders'" />
+      <CopyGenerator v-else-if="page === 'copy'" />
+      <!-- ... -->
+    </template>
+  </MerchantLayout>
+  <UserLayout v-else-if="currentView === 'user' && userInfo" :user-info="userInfo" @logout="handleLogout">
+    <template #default="{ page }">
+      <ProductBrowse v-if="page === 'products'" />
+      <UserProfile v-else-if="page === 'profile'" />
+    </template>
+  </UserLayout>
+</template>
+```
+
+### 6.2 API 封装层
+
+[frontend/src/api.ts](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/frontend/src/api.ts) 定义 TypeScript 类型并封装 fetch：
+
+```typescript
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: '请求失败' }))
+    throw new Error(error.message || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export const api = {
+  async generateCopy(data: CopyGenerationRequest): Promise<CopyGenerationResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/copy/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    return handleResponse<CopyGenerationResponse>(response)
+  },
+
+  async analyzeReviews(data: ReviewAnalysisRequest): Promise<ReviewAnalysisResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/reviews/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    return handleResponse<ReviewAnalysisResponse>(response)
+  },
+  // ...
+}
+```
+
+### 6.3 评论情感分析页面
+
+[frontend/src/components/ReviewAnalyzer.vue](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/frontend/src/components/ReviewAnalyzer.vue) 修复后的关键逻辑：
+
+```vue
+<select
+  :value="selectedProductId ?? ''"
+  class="db-select"
+  :disabled="loadingProducts || !selectedCategory"
+  @change="onProductSelectChange"
+>
+  <option value="">
+    {{ loadingProducts ? '加载商品中...' : !selectedCategory ? '请先选择分类' : '选择商品' }}
+  </option>
+  <option v-for="p in products" :key="p.id" :value="p.id">
+    {{ p.name }}
+  </option>
+</select>
+```
+
+```typescript
+async function loadProductReviews() {
+  const pid = selectedProductId.value
+  if (pid === null || pid === undefined || isNaN(pid)) return
+  loadingReviews.value = true
+  dbError.value = null
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/products/${pid}/reviews?limit=50`,
+      { headers: authHeaders() },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${res.status}`)
+    }
+    const data = await res.json()
+    const list = (data.reviews || []) as Array<string | { content?: string }>
+    const contents = list
+      .map((r) => (typeof r === 'string' ? r : r.content))
+      .filter((c): c is string => !!c && c.trim() !== '')
+    form.value.reviews_text = contents.join('\n')
+  } catch (e) {
+    dbError.value = e instanceof Error ? e.message : '加载商品评论失败'
+  } finally {
+    loadingReviews.value = false
+  }
+}
+```
+
+### 6.4 商家订单管理页面
+
+[frontend/src/components/merchant/OrderManage.vue](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/frontend/src/components/merchant/OrderManage.vue) 包含：
+
+- 状态汇总卡片
+- 关键词搜索
+- 分页列表
+- 发货弹窗（填写快递单号）
+- 取消订单弹窗
+
+```typescript
+async function loadOrders() {
+  const params = new URLSearchParams()
+  params.set('page', currentPage.value.toString())
+  params.set('page_size', pageSize.value.toString())
+  if (activeStatus.value !== 'all') params.set('status', activeStatus.value)
+  if (searchKeyword.value.trim()) params.set('keyword', searchKeyword.value.trim())
+
+  const res = await fetch(
+    `${API_BASE}/api/merchant/orders?${params.toString()}`,
+    { headers: authHeaders() },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  orders.value = data.orders || []
+  total.value = data.total || 0
+  totalPages.value = data.total_pages || 1
+  statusCounts.value = data.status_counts || {}
+}
+```
+
+发货按钮与弹窗：
+
+```vue
+<button
+  v-if="order.status === 'paid'"
+  class="om-btn om-btn--primary"
+  :disabled="shippingIds.has(order.id)"
+  @click="openShipModal(order)"
+>
+  {{ shippingIds.has(order.id) ? '发货中...' : '发货' }}
+</button>
+<button
+  v-if="!['completed', 'cancelled'].includes(order.status)"
+  class="om-btn om-btn--danger"
+  :disabled="cancellingIds.has(order.id)"
+  @click="openCancelModal(order)"
+>
+  {{ cancellingIds.has(order.id) ? '取消中...' : '取消订单' }}
+</button>
+```
+
+### 6.5 用户我的订单页面
+
+[frontend/src/components/user/MyOrders.vue](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/frontend/src/components/user/MyOrders.vue) 包含：
+
+- 状态 Tab 筛选
+- 分页列表
+- 确认收货、评价、退换货、填写退货单号
+
+退换货弹窗：
+
+```vue
+<div class="mo-return-types">
+  <label :class="['mo-return-type', { active: returnForm.return_type === 'return' }]">
+    <input v-model="returnForm.return_type" type="radio" value="return" />
+    <span>退货</span>
+  </label>
+  <label :class="['mo-return-type', { active: returnForm.return_type === 'exchange' }]">
+    <input v-model="returnForm.return_type" type="radio" value="exchange" />
+    <span>换货</span>
+  </label>
+</div>
+```
+
+退货单号提交：
+
+```typescript
+async function submitReturnTracking() {
+  const order = returnTrackingOrder.value
+  if (!order) return
+  const trackingNo = returnTrackingNo.value.trim()
+  if (!trackingNo) {
+    showToast('请填写退货快递单号', 'error')
+    return
+  }
+  returnTrackingLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/user/orders/${order.id}/return-tracking`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ tracking_no: trackingNo }),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${response.status}`)
+    }
+    showToast('退货快递单号已提交')
+    closeReturnTrackingModal()
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '提交失败', 'error')
+  } finally {
+    returnTrackingLoading.value = false
+  }
+}
+```
+
+### 6.6 商家客服 AI 回复渲染
+
+[frontend/src/components/merchant/MerchantCustomerService.vue](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/frontend/src/components/merchant/MerchantCustomerService.vue) 修复 AI 消息 Markdown 显示：
+
+```typescript
+function renderMarkdown(text: string): string {
+  if (!text) return ''
+  let html = text
+  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/\n/g, '<br>')
+  html = html.replace(/•\s?(.+?)(<br>|$)/g, '<li>$1</li>')
+  html = html.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, (match) => {
+    return '<ul class="mcs-list">' + match + '</ul>'
+  })
+  html = html.replace(/<\/li><br><li>/g, '</li><li>')
+  html = html.replace(/<br>(<ul)/g, '$1')
+  html = html.replace(/(<\/ul>)<br>/g, '$1')
+  return html
+}
+```
+
+```vue
+<div
+  v-if="msg.sender_role === 'ai'"
+  class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] leading-relaxed shadow-sm bg-primary-light/40 text-gray-800 border border-primary-light/60 rounded-bl-sm"
+  v-html="renderMarkdown(msg.content)"
+></div>
+```
+
+---
+
+## 7. 认证流程
+
+1. 用户登录 → [backend/api/auth_routes.py](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/backend/api/auth_routes.py) 校验用户名密码
+2. 生成 JWT Token，返回 `{token, userInfo}`
+3. 前端存储 `localStorage.setItem('token', token)` 和 `userInfo`
+4. 后续请求在 Header 中携带 `Authorization: Bearer <token>`
+5. 商家接口使用 `require_merchant(request)`，用户接口使用 `require_auth(request)` 做权限隔离
+
+---
+
+## 8. 数据流示例：商品文案生成
+
+```
+[前端] CopyGenerator.vue
+    │  1. 用户填写商品名、受众、风格、卖点
+    │  2. 调用 api.generateCopy()
+    │  3. POST /api/copy/generate
+    ▼
+[后端] routes.py generate_copy()
+    │  4. Pydantic 校验 CopyGenerationRequest
+    │  5. 查 Redis 缓存
+    │  6. 未命中 → 调用 AIProvider.generate_copy()
+    ▼
+[AI] ai_mock.py / openai_provider.py
+    │  7. 按风格模板生成标题/卖点/详情/广告语
+    ▼
+[后端] routes.py
+    │  8. 写入 Redis 缓存
+    │  9. 记录 GenerationTask
+    │  10. 返回 JSON
+    ▼
+[前端] 展示结果，支持编辑 / 下载 TXT
+```
+
+---
+
+## 9. 部署方式
+
+### 9.1 Conda 本地开发（零基础）
+
+```bash
+# 1. 安装 Miniconda 后打开终端
+conda create -n ecommerce-ai python=3.11 -y
+conda activate ecommerce-ai
+
+# 2. 进入项目目录
+cd ecommerce-ai-copy-guide
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 配置环境变量（Windows）
+copy .env.example .env
+
+# 5. 启动 PostgreSQL + Redis（Docker）
+docker compose up postgres redis -d
+
+# 6. 初始化数据库
+python -c "from backend.database import init_db; init_db()"
+
+# 7. 启动后端
+python -m flask --app backend.app run --host=0.0.0.0 --port=8000
+
+# 8. 新终端启动前端
+cd frontend
+npm install
+npm run dev
+```
+
+访问：
+
+- 前端：http://localhost:5173
+- 后端：http://localhost:8000
+- 健康检查：http://localhost:8000/health
+
+### 9.2 Docker Compose 一键部署
+
+[docker-compose.yml](file:///c:/Users/Jin/Desktop/ecommerce-ai-copy-guide-main/docker-compose.yml) 编排了 postgres、redis、backend，并配置了健康检查：
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ecommerce_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-ecommerce_ai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecommerce_ai_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ecommerce_ai} -d ${POSTGRES_DB:-ecommerce_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+启动命令：
+
+```bash
+# 全部服务（含后端）
+docker compose up --build -d
+
+# 数据库迁移（容器启动时也会自动执行）
+docker compose exec backend alembic upgrade head
+
+# 查看日志
+docker compose logs -f backend
+
+# 停止
+docker compose down
+```
+
+本地前端开发：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 9.3 接入真实 AI
+
+编辑 `.env`：
+
+```env
+AI_PROVIDER=openai
+AI_API_KEY=sk-your-api-key
+AI_MODEL=gpt-4o-mini
+AI_BASE_URL=https://your-proxy.com/v1  # 国内镜像可选
+```
+
+不配置时默认使用 Mock AI，功能完整可演示。
+
+---
+
+## 10. 默认测试账号
+
+| 角色 | 用户名 | 密码 |
+|------|--------|------|
+| 商家 | `merchant` | `merchant123` |
+| 用户 | `user` | `user123` |
+
+---
+
+## 11. 常见问题排查
+
+| 现象 | 排查方向 |
+|------|----------|
+| 后端报数据库连接错误 | 检查 PostgreSQL 是否启动，`.env` 中 `DATABASE_URL` 是否正确；系统会自动降级 SQLite |
+| 前端页面空白或接口报错 | 确认后端已启动，`frontend/.env` 或 `vite.config.ts` 代理指向 `http://localhost:8000` |
+| AI 功能没有真实结果 | 默认使用 Mock AI，如需真实模型请配置 `AI_PROVIDER`、`AI_API_KEY`、`AI_MODEL` |
+| 评论情感分析页面报错 | 检查商品下拉选择是否正确绑定数值，`loadProductReviews` 是否捕获了 API 错误 |
+| 订单操作失败 | 检查订单状态是否符合业务规则（如只有 `paid` 状态才能发货） |
+
+---
+
+## 12. 扩展建议
+
+1. **接入真实支付**：当前为模拟支付，可接入微信支付 / 支付宝 SDK。
+2. **消息通知**：订单状态变更可通过 WebSocket 或短信/邮件通知用户。
+3. **物流查询**：对接快递 100 等物流查询 API，实时展示物流轨迹。
+4. **向量检索**：RAG 问答可接入 embedding 模型做语义检索，替代关键词匹配。
+5. **前端构建**：生产环境执行 `cd frontend && npm run build`，将 dist 目录部署到 Nginx/CDN。

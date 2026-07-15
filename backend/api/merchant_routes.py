@@ -1,17 +1,15 @@
 """商家管理路由 - 商品CRUD + 知识库管理 + 问答统计 + 订单管理"""
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc
 
 from backend.database import SessionLocal
 from backend.models.product import Product
-from backend.models.review import Review
 from backend.models.user import User
 from backend.models.shopping import Order
 from backend.services.auth_service import require_merchant, hash_password
@@ -716,7 +714,6 @@ def create_user():
         new_user = User(
             username=username,
             password_hash=hash_password(password),
-            password_plain=password,
             nickname=nickname or username,
             role=role,
         )
@@ -747,7 +744,6 @@ def update_user(user_id: int):
             if len(data["password"]) < 6:
                 return jsonify({"error": "weak_password", "message": "密码长度至少6位"}), 400
             target_user.password_hash = hash_password(data["password"])
-            target_user.password_plain = data["password"]
         if "role" in data and data["role"] in ("user", "merchant"):
             target_user.role = data["role"]
         if "is_active" in data:
@@ -771,7 +767,7 @@ def delete_user(user_id: int):
         return jsonify(error), 401
 
     # 不能删除自己
-    if user_id == user.id:
+    if user_id == user["user_id"]:
         return jsonify({"error": "forbidden", "message": "不能删除自己的账号"}), 403
 
     with SessionLocal() as db:

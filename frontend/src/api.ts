@@ -3,7 +3,7 @@
  * 封装与后端的 HTTP 请求
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 interface CopyGenerationRequest {
   product_name: string
@@ -142,85 +142,66 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json()
 }
 
+function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return fetch(`${API_BASE_URL}${path}`, init).then(handleResponse<T>)
+}
+
+function post<TResponse>(path: string, data: unknown): Promise<TResponse> {
+  return request<TResponse>(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
 export const api = {
   /**
    * 生成商品文案
    */
   async generateCopy(data: CopyGenerationRequest): Promise<CopyGenerationResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/copy/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return handleResponse<CopyGenerationResponse>(response)
+    return post('/api/copy/generate', data)
   },
 
   /**
    * 智能导购推荐
    */
   async recommendGuide(data: GuideRecommendationRequest): Promise<GuideRecommendationResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/guide/recommend`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return handleResponse<GuideRecommendationResponse>(response)
+    return post('/api/guide/recommend', data)
   },
 
   /**
    * 智能导购问答
    */
   async guideQA(data: GuideQARequest): Promise<GuideQAResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/guide/qa`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return handleResponse<GuideQAResponse>(response)
+    return post('/api/guide/qa', data)
   },
 
   /**
    * 跨商品推荐
    */
   async crossRecommend(data: CrossRecommendRequest): Promise<CrossRecommendResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/guide/cross-recommend`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return handleResponse<CrossRecommendResponse>(response)
+    return post('/api/guide/cross-recommend', data)
   },
 
   /**
    * 评论情感分析
    */
   async analyzeReviews(data: ReviewAnalysisRequest): Promise<ReviewAnalysisResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/reviews/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return handleResponse<ReviewAnalysisResponse>(response)
+    return post('/api/reviews/analyze', data)
   },
 
   /**
    * 直播脚本生成
    */
   async generateLiveScript(data: LiveScriptRequest): Promise<LiveScriptResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/scripts/live`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return handleResponse<LiveScriptResponse>(response)
+    return post('/api/scripts/live', data)
   },
 
   /**
    * 健康检查
    */
   async checkHealth(): Promise<{ status: string; version: string }> {
-    const response = await fetch(`${API_BASE_URL}/health`)
-    return handleResponse(response)
+    return request('/health')
   },
 }
 

@@ -11,7 +11,7 @@ import re
 from collections import Counter
 from typing import Optional
 
-from sqlalchemy import select, or_, func
+from sqlalchemy import desc, func, or_, select
 
 from backend.database import SessionLocal
 from backend.models.knowledge_base import KnowledgeEntry, QARecord
@@ -119,7 +119,7 @@ class RAGService:
     ) -> list[dict]:
         """检索知识库中与问题最相关的条目"""
         with SessionLocal() as db:
-            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active == True)
+            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active.is_(True))
             if product_id:
                 stmt = stmt.where(
                     or_(
@@ -511,7 +511,7 @@ class RAGService:
         entries = list(db.execute(
             select(KnowledgeEntry)
             .where(
-                KnowledgeEntry.is_active == True,
+                KnowledgeEntry.is_active.is_(True),
                 or_(
                     KnowledgeEntry.product_id == product.id,
                     KnowledgeEntry.product_id.is_(None),
@@ -773,22 +773,22 @@ class RAGService:
 
         # 推荐理由
         if rating >= 4.5 and review_count >= 10:
-            parts.append(f"\n推荐理由：这款商品评分和口碑都很出色，是同类中的热门选择。")
+            parts.append("\n推荐理由：这款商品评分和口碑都很出色，是同类中的热门选择。")
         elif price > 0 and related:
             avg_price = sum(p.price or 0 for p in related) / len(related) if related else price
             if price <= avg_price * 0.9:
-                parts.append(f"\n推荐理由：价格低于同类均价，性价比较高。")
+                parts.append("\n推荐理由：价格低于同类均价，性价比较高。")
             else:
-                parts.append(f"\n推荐理由：综合评分稳定，适合大多数用户选择。")
+                parts.append("\n推荐理由：综合评分稳定，适合大多数用户选择。")
 
         if related:
-            parts.append(f"\n同分类其他优质选择：")
+            parts.append("\n同分类其他优质选择：")
             for i, p in enumerate(related[:3], 1):
                 parts.append(
                     f"  {i}. 「{p.name}」¥{p.price or 0:.0f} | {p.rating or 5.0}分 | {p.review_count or 0}条评价"
                 )
 
-        parts.append(f"\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
+        parts.append("\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
         return "\n".join(parts)
 
     def _get_real_brand(self, product: Product) -> str:
@@ -866,7 +866,7 @@ class RAGService:
                     func_reviews.append(f"  • {content[:80]}")
 
             if func_reviews:
-                parts.append(f"\n用户使用反馈：")
+                parts.append("\n用户使用反馈：")
                 parts.extend(func_reviews[:3])
 
         parts.append(f"\n商品评分 {product.rating or 5.0} 分，{product.review_count or 0} 条评价，整体口碑{'优秀' if (product.rating or 0) >= 4.5 else '良好' if (product.rating or 0) >= 4.0 else '一般'}。")
@@ -985,14 +985,14 @@ class RAGService:
     def _answer_compare(self, product: Product, related: list[Product], question: str) -> str:
         """比较问题 - 用同类商品数据对比"""
         parts = [f"为您对比「{product.name}」与同类商品："]
-        parts.append(f"\n当前商品：")
+        parts.append("\n当前商品：")
         parts.append(f"  • 名称：{product.name}")
         parts.append(f"  • 价格：¥{product.price or 0:.0f}")
         parts.append(f"  • 评分：{product.rating or 5.0} 分")
         parts.append(f"  • 评价数：{product.review_count or 0} 条")
 
         if related:
-            parts.append(f"\n同类对比：")
+            parts.append("\n同类对比：")
             for i, p in enumerate(related[:3], 1):
                 price_diff = ""
                 if product.price and p.price:
@@ -1038,18 +1038,18 @@ class RAGService:
             # 优先展示一条有内容的代表性评论
             best_review = max(reviews[:5], key=lambda r: len(r.content or "")) if reviews else None
             if best_review and best_review.content:
-                parts.append(f"\n用户评价摘录：")
+                parts.append("\n用户评价摘录：")
                 parts.append(f"  「{best_review.content[:100]}」")
 
         # 根据评分给出购买建议
         if rating >= 4.5 and review_count >= 10:
-            parts.append(f"\n综合来看，这款商品评分高、评价多，口碑不错，值得考虑～")
+            parts.append("\n综合来看，这款商品评分高、评价多，口碑不错，值得考虑～")
         elif rating >= 4.0:
-            parts.append(f"\n这款商品整体评价尚可，您可以根据自己的需求再对比看看。")
+            parts.append("\n这款商品整体评价尚可，您可以根据自己的需求再对比看看。")
         else:
-            parts.append(f"\n这款商品评分一般，建议您多看看评价细节后再做决定。")
+            parts.append("\n这款商品评分一般，建议您多看看评价细节后再做决定。")
 
-        parts.append(f"\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
+        parts.append("\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
 
         return "\n".join(parts)
 
@@ -1300,7 +1300,7 @@ class RAGService:
         keyword: str | None = None,
     ) -> list[dict]:
         with SessionLocal() as db:
-            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active == True)
+            stmt = select(KnowledgeEntry).where(KnowledgeEntry.is_active.is_(True))
             if product_id:
                 stmt = stmt.where(KnowledgeEntry.product_id == product_id)
             if category:
@@ -1321,7 +1321,11 @@ class RAGService:
     def list_knowledge_categories(self) -> list[str]:
         """返回知识库中所有不重复的知识类型"""
         with SessionLocal() as db:
-            stmt = select(KnowledgeEntry.category).distinct().where(KnowledgeEntry.is_active == True)
+            stmt = (
+                select(KnowledgeEntry.category)
+                .distinct()
+                .where(KnowledgeEntry.is_active.is_(True))
+            )
             rows = list(db.execute(stmt).scalars().all())
             return [r for r in rows if r]
 

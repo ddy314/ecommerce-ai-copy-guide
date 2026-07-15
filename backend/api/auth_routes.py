@@ -16,7 +16,6 @@ from backend.services.auth_service import (
     hash_password,
     verify_password,
     create_token,
-    verify_token,
 )
 from backend.utils.helpers import generate_user_display_id
 

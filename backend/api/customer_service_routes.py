@@ -183,7 +183,7 @@ def merchant_threads():
                     .where(
                         CustomerServiceMessage.user_id == msg.user_id,
                         CustomerServiceMessage.sender_role == "user",
-                        CustomerServiceMessage.is_read == False,
+                        CustomerServiceMessage.is_read.is_(False),
                     )
                 ).scalar() or 0
                 result.append({
@@ -343,7 +343,7 @@ def merchant_unread_count():
                 select(func.count(CustomerServiceMessage.id))
                 .where(
                     CustomerServiceMessage.sender_role == "user",
-                    CustomerServiceMessage.is_read == False,
+                    CustomerServiceMessage.is_read.is_(False),
                 )
             ).scalar() or 0
 

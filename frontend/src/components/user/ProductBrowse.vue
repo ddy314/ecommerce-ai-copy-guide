@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, inject, watch, type Ref } from 'vue'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 // ---------- 类型定义 ----------
 interface Product {

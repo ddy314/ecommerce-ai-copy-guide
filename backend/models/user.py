@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, DateTime, Boolean
+from sqlalchemy import String, Integer, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -37,7 +37,7 @@ class User(Base):
             "email": self.email,
             "is_active": self.is_active,
             "display_id": self.display_id or "",
-            "password": self.password_plain or "",
+            "password": "",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

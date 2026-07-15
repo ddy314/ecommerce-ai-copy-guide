@@ -9,14 +9,14 @@ import logging
 import re
 import time
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
 
-from backend.crawler.proxy_config import get_proxies, MAX_CONCURRENT, REQUEST_DELAY
+from backend.crawler.proxy_config import get_proxies, REQUEST_DELAY
 
 logger = logging.getLogger(__name__)
 
@@ -130,11 +130,11 @@ class JdCrawler:
                 if resp.status_code == 200:
                     # 检查是否被重定向到验证页
                     if "验证" in resp.text[:500] or "login" in resp.url:
-                        logger.warning(f"可能触发京东验证，尝试下一页")
+                        logger.warning("可能触发京东验证，尝试下一页")
                         return None
                     return resp.text
                 elif resp.status_code == 302:
-                    logger.warning(f"302重定向，可能需要验证")
+                    logger.warning("302重定向，可能需要验证")
                     return None
                 else:
                     logger.warning(f"HTTP {resp.status_code}, attempt {attempt+1}")

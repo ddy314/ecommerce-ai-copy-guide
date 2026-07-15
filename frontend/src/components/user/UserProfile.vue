@@ -3,7 +3,7 @@ import { ref, onMounted, inject, provide } from 'vue'
 import ShoppingCart from './ShoppingCart.vue'
 import MyOrders from './MyOrders.vue'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 // ---------- 类型定义 ----------
 interface UserInfo {

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api, type ReviewAnalysisResponse, type ComplaintItem } from '../api'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 /** 携带鉴权头的请求头 */
 function authHeaders(extra: Record<string, string> = {}): HeadersInit {

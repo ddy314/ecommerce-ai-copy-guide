@@ -6,15 +6,11 @@ import sys
 
 from flask import Flask, jsonify
 
-from backend.api.routes import api_bp
-from backend.api.auth_routes import auth_bp
-from backend.api.merchant_routes import merchant_bp
-from backend.api.user_routes import user_bp
-from backend.api.crawl_routes import crawl_bp
-from backend.api.customer_service_routes import cs_bp
+from backend.api import BLUEPRINTS
 from backend.config import AppConfig
 from backend.docs.openapi import docs_bp
 from backend.database import init_db
+from backend.extensions import init_extensions
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +43,6 @@ def _create_default_users():
                 merchant = User(
                     username="merchant",
                     password_hash=hash_password("merchant123"),
-                    password_plain="merchant123",
                     nickname="商家管理员",
                     role="merchant",
                 )
@@ -62,7 +57,6 @@ def _create_default_users():
                 user = User(
                     username="user",
                     password_hash=hash_password("user123"),
-                    password_plain="user123",
                     nickname="测试用户",
                     role="user",
                 )
@@ -77,14 +71,19 @@ def _create_default_users():
 def create_app(config: AppConfig | None = None) -> Flask:
     app_config = config or AppConfig.from_env()
     setup_logging(app_config)
-    
+
     app = Flask(__name__)
     app.config["APP_CONFIG"] = app_config
     app.config["UPLOAD_FOLDER"] = os.path.join(os.path.dirname(__file__), "uploads")
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-    
-    logger = logging.getLogger(__name__)
-    logger.info(f"启动应用: env={app_config.app_env}, host={app_config.app_host}, port={app_config.app_port}")
+    init_extensions(app, app_config)
+
+    logger.info(
+        "启动应用: env=%s, host=%s, port=%s",
+        app_config.app_env,
+        app_config.app_host,
+        app_config.app_port,
+    )
 
     @app.get("/health")
     def health() -> tuple[dict[str, object], int]:
@@ -98,33 +97,17 @@ def create_app(config: AppConfig | None = None) -> Flask:
     @app.errorhandler(404)
     def not_found(_error: Exception):
         logger.warning(f"404 Not Found: {_error}")
-        return jsonify({
-            "error": "not_found",
-            "message": "请求的资源不存在"
-        }), 404
+        return jsonify({"error": "not_found", "message": "请求的资源不存在"}), 404
 
     @app.errorhandler(500)
     def server_error(_error: Exception):
         logger.error(f"500 Internal Server Error: {_error}", exc_info=True)
-        return jsonify({
-            "error": "server_error",
-            "message": "服务器内部错误"
-        }), 500
+        return jsonify({"error": "server_error", "message": "服务器内部错误"}), 500
 
     @app.errorhandler(400)
     def bad_request(_error: Exception):
         logger.warning(f"400 Bad Request: {_error}")
-        return jsonify({
-            "error": "bad_request",
-            "message": "请求格式错误"
-        }), 400
-
-    @app.after_request
-    def add_cors_headers(response):
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
-        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
-        return response
+        return jsonify({"error": "bad_request", "message": "请求格式错误"}), 400
 
     # 初始化数据库表
     try:
@@ -136,14 +119,10 @@ def create_app(config: AppConfig | None = None) -> Flask:
     # 创建默认商家账号（如果不存在）
     _create_default_users()
 
-    app.register_blueprint(api_bp, url_prefix="/api")
-    app.register_blueprint(auth_bp, url_prefix="/api")
-    app.register_blueprint(merchant_bp, url_prefix="/api")
-    app.register_blueprint(user_bp, url_prefix="/api")
-    app.register_blueprint(crawl_bp, url_prefix="/api")
-    app.register_blueprint(cs_bp, url_prefix="/api")
+    for blueprint in BLUEPRINTS:
+        app.register_blueprint(blueprint, url_prefix="/api")
     app.register_blueprint(docs_bp)
-    logger.info("应用初始化完成，已注册全部蓝图: API + 认证 + 商家 + 用户 + 客服")
+    logger.info("应用初始化完成，已注册 API、认证、商家、用户、爬虫、客服与文档蓝图")
     return app
 
 

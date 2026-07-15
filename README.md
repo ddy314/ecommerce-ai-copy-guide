@@ -4,7 +4,7 @@
 
 ## 项目简介
 
-本项目是一个面向电商运营场景的 AI 助手系统，通过 Scrapy 爬虫从京东等购物平台抓取商品和评论数据，存储到 PostgreSQL 数据库，利用 Redis 缓存热点数据，接入 AI 大模型实现以下功能：
+本项目是一个面向电商运营场景的 AI 助手系统，通过轻量 HTTP 爬虫采集电商商品和评论数据，存储到 PostgreSQL 数据库，利用 Redis 缓存热点数据，接入 AI 大模型实现以下功能：
 
 - 商品文案智能生成
 - 智能导购推荐
@@ -16,11 +16,11 @@
 
 | 层次 | 技术 | 说明 |
 |------|------|------|
-| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS | 响应式单页应用 |
-| 后端 | Flask 3 + Pydantic 2 + SQLAlchemy 2 | RESTful API |
+| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS + Ant Design Vue + Motion | 响应式单页应用、组件化设计系统与页面动画 |
+| 后端 | Flask 3 + Flask-JWT-Extended + Flask-CORS + Pydantic 2 + SQLAlchemy 2 | RESTful API、标准 JWT 与跨域管理 |
 | 数据库 | PostgreSQL 16 | 商品、评论、订单、用户等持久化 |
 | 缓存 | Redis 7 | 热点数据缓存 |
-| 爬虫 | Scrapy 2 | 京东商品与评论爬取 |
+| 爬虫 | Requests + Beautiful Soup | 京东、苏宁商品与评论采集 |
 | AI | OpenAI API / Mock | 文案、分析、推荐、客服回复 |
 | 部署 | Docker + Docker Compose | 一键编排后端依赖服务 |
 
@@ -92,7 +92,7 @@ docker compose up postgres redis -d
 #### 7. 初始化数据库
 
 ```bash
-python -c "from backend.database import init_db; init_db()"
+alembic upgrade head
 ```
 
 #### 8. 启动后端服务
@@ -133,16 +133,18 @@ npm run dev
 - Windows/macOS：下载 [Docker Desktop](https://www.docker.com/products/docker-desktop) 并安装。
 - Linux：参考官方文档安装 Docker Engine 与 Docker Compose。
 
-#### 2. 配置环境变量
+#### 2. 配置环境变量（可选）
 
 ```bash
 copy .env.example .env
 ```
 
+不复制也能以 Mock AI 和本地开发默认值启动；正式部署必须在 `.env` 中更换 `JWT_SECRET` 与数据库密码。
+
 #### 3. 构建并启动全部服务
 
 ```bash
-docker compose --profile app up --build -d
+docker compose up --build -d
 ```
 
 该命令会启动：
@@ -150,24 +152,10 @@ docker compose --profile app up --build -d
 - `postgres`：PostgreSQL 数据库
 - `redis`：Redis 缓存
 - `backend`：Flask 后端服务
+- `frontend`：Nginx 静态站点与 API 反向代理
 
-#### 4. 初始化数据库
-
-```bash
-docker compose exec backend python -c "from backend.database import init_db; init_db()"
-```
-
-#### 5. 启动前端
-
-Docker Compose 目前主要编排后端依赖服务。前端开发服务器需要在本地启动：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-访问 http://localhost:5173 即可使用。
+后端容器会先自动执行 `alembic upgrade head`，无需手工初始化数据库。
+启动完成后访问 http://localhost:8080；Nginx 会把 `/api` 与 `/health` 同源转发给后端。
 
 #### 6. 常用 Docker 命令
 
@@ -179,10 +167,10 @@ docker compose ps
 docker compose logs -f backend
 
 # 停止服务
-docker compose --profile app down
+docker compose down
 
 # 完全重建
-docker compose --profile app up --build -d
+docker compose up --build -d
 ```
 
 ---
@@ -206,7 +194,7 @@ AI_BASE_URL=https://your-proxy.com/v1
 ## 核心功能
 
 ### 1. 商品数据库
-- Scrapy 爬虫从京东抓取真实商品数据
+- 轻量爬虫从京东、苏宁采集真实商品数据
 - 支持分类筛选、关键词搜索
 - 商品详情含价格、品牌、评分、评论数
 
@@ -260,20 +248,17 @@ AI_BASE_URL=https://your-proxy.com/v1
 │   │   ├── ai_mock.py
 │   │   ├── openai_provider.py
 │   │   └── rag_service.py
-│   ├── database.py             # 数据库连接与迁移
-│   ├── app.py                  # Flask 应用入口
-│   └── config.py               # 配置管理
-├── crawler/                    # Scrapy 爬虫
-│   ├── spiders/
-│   ├── items.py
-│   ├── pipelines.py
-│   └── settings.py
+│   ├── crawler/                # 轻量商品爬虫与任务管理
+│   │   ├── crawl_manager.py
+│   │   ├── jd_crawler.py
+│   │   └── suning_crawler.py
+│   ├── database.py             # SQLAlchemy 连接与会话
+│   ├── config.py               # 配置管理
+│   └── app.py                  # 唯一后端入口（Flask）
 ├── frontend/                   # 前端应用
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── ProductList.vue
 │   │   │   ├── CopyGenerator.vue
-│   │   │   ├── GuideRecommender.vue
 │   │   │   ├── ReviewAnalyzer.vue
 │   │   │   ├── LiveScriptGenerator.vue
 │   │   │   ├── user/MyOrders.vue
@@ -281,10 +266,13 @@ AI_BASE_URL=https://your-proxy.com/v1
 │   │   ├── App.vue
 │   │   └── main.ts
 │   └── package.json
-├── run_crawler.py              # 爬虫运行脚本
+├── migrations/                 # Alembic 数据库迁移
+├── docs/                       # 技术文档与生成报告（本地提交材料被 Git 忽略）
+├── scripts/                    # 容器启动与维护脚本
 ├── docker-compose.yml          # Docker 编排
 ├── Dockerfile                  # 后端容器镜像
 ├── requirements.txt            # Python 依赖
+├── requirements-dev.txt        # 测试与静态检查依赖
 ├── .env.example                # 环境变量模板
 └── README.md
 ```
@@ -293,28 +281,17 @@ AI_BASE_URL=https://your-proxy.com/v1
 
 ## 运行爬虫（可选）
 
-```bash
-# 爬取京东商品数据
-python run_crawler.py products
-
-# 爬取指定商品评论
-python run_crawler.py reviews 10001234,10005678
-
-# 初始化数据库并爬取商品
-python run_crawler.py all
-```
-
-使用 Docker 时：
-
-```bash
-docker compose exec backend python run_crawler.py all
-```
+爬虫作为 Flask 后端的一部分运行。商家登录后可通过 `/api/crawl/preset-keywords`、
+`/api/crawl/start` 和 `/api/crawl/status/<task_id>` 管理采集任务，无需启动第二套服务。
 
 ---
 
 ## 测试
 
 ```bash
+# 首次测试先安装开发依赖
+pip install -r requirements-dev.txt
+
 # 后端测试
 python -m pytest tests/ -v
 
@@ -328,7 +305,7 @@ cd frontend && npm run build
 
 **Q：启动后端时报数据库连接错误？**
 
-A：请确认 PostgreSQL 已启动，且 `.env` 中的 `DATABASE_URL` 配置正确。如果未安装 PostgreSQL，可删除或留空 `DATABASE_URL`，后端会自动降级为 SQLite。
+A：请确认 PostgreSQL 已启动，且 `.env` 中的 `DATABASE_URL` 配置正确。如果未安装 PostgreSQL，可删除或留空 `DATABASE_URL`，后端会使用 `instance/ecommerce_ai.db`，不会在根目录产生数据库文件。
 
 **Q：前端页面空白或接口报错？**
 

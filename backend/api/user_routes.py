@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, Response
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc
 
 from backend.api.auth_routes import (
     _save_uploaded_file,
@@ -20,7 +20,7 @@ from backend.models.product import Product
 from backend.models.review import Review
 from backend.models.user import UserAddress, UserFavorite, BrowseHistory
 from backend.models.shopping import CartItem, Order, OrderItem
-from backend.services.auth_service import require_auth, get_user_from_request
+from backend.services.auth_service import require_auth
 from backend.services.rag_service import RAGService
 from backend.services.file_upload import FileUploadService
 from backend.services.ai_provider import get_ai_provider
@@ -230,7 +230,7 @@ def create_order():
             # 获取购物车选中项
             stmt = select(CartItem).where(
                 CartItem.user_id == user_payload["user_id"],
-                CartItem.selected == True,
+                CartItem.selected.is_(True),
             )
             if item_ids:
                 stmt = stmt.where(CartItem.id.in_(item_ids))
@@ -247,7 +247,7 @@ def create_order():
                 address = db.execute(
                     select(UserAddress).where(
                         UserAddress.user_id == user_payload["user_id"],
-                        UserAddress.is_default == True,
+                        UserAddress.is_default.is_(True),
                     )
                 ).scalar_one_or_none()
             if not address:
@@ -563,7 +563,7 @@ def add_address():
                 existing_defaults = db.execute(
                     select(UserAddress).where(
                         UserAddress.user_id == user_payload["user_id"],
-                        UserAddress.is_default == True,
+                        UserAddress.is_default.is_(True),
                     )
                 ).scalars().all()
                 for addr in existing_defaults:
@@ -614,7 +614,7 @@ def update_address(address_id: int):
                     others = db.execute(
                         select(UserAddress).where(
                             UserAddress.user_id == user_payload["user_id"],
-                            UserAddress.is_default == True,
+                            UserAddress.is_default.is_(True),
                         )
                     ).scalars().all()
                     for o in others:

@@ -17,6 +17,8 @@ class AppConfig:
     redis_url: str = ""
     ai_provider: str = ""
     ai_model: str = ""
+    jwt_secret: str = "development-only-secret-change-me-32-bytes"
+    cors_origins: tuple[str, ...] = ("http://localhost:5173", "http://localhost:8080")
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -29,6 +31,14 @@ class AppConfig:
             redis_url=os.getenv("REDIS_URL", ""),
             ai_provider=os.getenv("AI_PROVIDER", ""),
             ai_model=os.getenv("AI_MODEL", ""),
+            jwt_secret=os.getenv("JWT_SECRET", "development-only-secret-change-me-32-bytes"),
+            cors_origins=tuple(
+                origin.strip()
+                for origin in os.getenv(
+                    "CORS_ORIGINS", "http://localhost:5173,http://localhost:8080"
+                ).split(",")
+                if origin.strip()
+            ),
         )
 
     def public_summary(self) -> dict[str, str | bool | int]:

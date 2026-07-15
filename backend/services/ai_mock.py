@@ -382,8 +382,6 @@ class MockAIService:
         """从商品名称和分类推断规格信息"""
         if not name:
             return "标准规格"
-        name_lower = name.lower()
-
         # 尺码/规格类问题
         if q_type == "size":
             # 从名称提取尺寸信息
@@ -443,10 +441,6 @@ class MockAIService:
 
     def _generate_generic_answer(self, question: str, payload: GuideQARequest, q_type: str) -> str:
         """生成有意义的通用回答 - 基于商品信息而非说'看详情页'"""
-        product = payload.product_name or "该商品"
-        category = payload.category or ""
-        spec = payload.product_specs or ""
-
         # 根据问题类型生成不同回答
         if q_type == "price":
             return self._answer_price_question(question, payload)
@@ -507,7 +501,7 @@ class MockAIService:
             "家居家电": "标准规格，安装前请测量使用空间。建议预留5-10cm散热/操作空间。",
         }
         advice = size_advice.get(category, f"该商品为{category}类标准规格，适合常规使用场景。")
-        return f"关于{product}的尺寸规格：{advice}"
+        return f"关于{product}的尺寸规格：{spec}。{advice}"
 
     def _answer_function_question(self, question: str, payload: GuideQARequest) -> str:
         """回答功能使用问题"""
@@ -590,7 +584,7 @@ class MockAIService:
                 "办公家具": "建议搭配护腰靠垫、显示器支架使用，打造完整的健康办公环境。",
                 "鞋靴箱包": "建议搭配同风格的服装和配饰，整体造型更协调。",
             }
-            match_advice = match_map.get(category, f"建议搭配同分类的其他商品使用，效果更佳。")
+            match_advice = match_map.get(category, "建议搭配同分类的其他商品使用，效果更佳。")
             return f"搭配建议：{match_advice}"
 
         if any(kw in question for kw in ["场景", "场合", "适合什么"]):
@@ -618,7 +612,6 @@ class MockAIService:
 
     def _generate_tips(self, payload: GuideQARequest, q_type: str) -> list[str]:
         """根据问题类型生成相关提示"""
-        category = payload.category or ""
         tips_map = {
             "size": [
                 "建议购买前测量实际使用空间",
@@ -875,10 +868,10 @@ class MockAIService:
             {
                 "name": "互动答疑", "minutes": max(closing_mins - 1, 1),
                 "script": (
-                    f"看到弹幕有很多问题，我来集中回答。"
-                    f"关于尺寸——看屏幕左下角的尺寸表。"
-                    f"关于售后——支持7天无理由，质量问题包退换。"
-                    f"还有问题打在公屏上，我一对一解答。"
+                    "看到弹幕有很多问题，我来集中回答。"
+                    "关于尺寸——看屏幕左下角的尺寸表。"
+                    "关于售后——支持7天无理由，质量问题包退换。"
+                    "还有问题打在公屏上，我一对一解答。"
                 ),
                 "action_hint": "切换到评论互动画面，展示尺寸表/售后政策",
             },
@@ -929,17 +922,17 @@ class MockAIService:
     ) -> list[str]:
         return [
             f"你最关注{product}的哪个功能？打在公屏上我针对性讲。",
-            f"有拿不准尺码/规格的吗？告诉我你的情况，我帮你推荐。",
-            f"觉得这个价格怎么样？想要什么赠品？弹幕告诉我。",
-            f"之前用过同类产品的，对比一下体验差异？",
-            f"还有什么想了解的？接下来5分钟集中答疑。",
+            "有拿不准尺码/规格的吗？告诉我你的情况，我帮你推荐。",
+            "觉得这个价格怎么样？想要什么赠品？弹幕告诉我。",
+            "之前用过同类产品的，对比一下体验差异？",
+            "还有什么想了解的？接下来5分钟集中答疑。",
         ]
 
     def _build_conversion_scripts(self, product: str, tone: str, audience: str) -> list[str]:
         return [
-            f"今天直播间专属价，比日常省XX元。库存只有XX件，抢完恢复原价。",
+            "今天直播间专属价，比日常省XX元。库存只有XX件，抢完恢复原价。",
             f"现在下单额外送{product}配件礼包，仅限今天直播间下单的用户。",
-            f"3分钟内下单的，再加赠运费险。不满意包退，退货不用你出运费。",
-            f"已经有XX位家人下单了。还在犹豫的，先拍下锁定优惠，不满意随时退。",
-            f"最后30秒！没付款的抓紧，链接马上关闭。",
+            "3分钟内下单的，再加赠运费险。不满意包退，退货不用你出运费。",
+            "已经有XX位家人下单了。还在犹豫的，先拍下锁定优惠，不满意随时退。",
+            "最后30秒！没付款的抓紧，链接马上关闭。",
         ]
