@@ -19,16 +19,15 @@ interface UserInfo {
   phone: string | null
   email: string | null
   is_active: boolean
-  password: string
   created_at: string
 }
 
 const loading = ref(false)
 const error = ref<string | null>(null)
 const users = ref<UserInfo[]>([])
-const total = ref(0)
 const keyword = ref('')
 const roleFilter = ref('')
+const statusFilter = ref('')
 
 // 弹窗状态
 const showModal = ref(false)
@@ -55,14 +54,34 @@ const filteredUsers = computed(() => {
   if (roleFilter.value) {
     list = list.filter(u => u.role === roleFilter.value)
   }
+  if (statusFilter.value) {
+    const active = statusFilter.value === 'active'
+    list = list.filter(u => u.is_active === active)
+  }
   if (keyword.value) {
     const kw = keyword.value.toLowerCase()
     list = list.filter(u =>
       u.username.toLowerCase().includes(kw) ||
-      u.nickname.toLowerCase().includes(kw)
+      u.nickname.toLowerCase().includes(kw) ||
+      (u.phone && u.phone.includes(kw)) ||
+      (u.email && u.email.toLowerCase().includes(kw))
     )
   }
   return list
+})
+
+const stats = computed(() => {
+  const total = users.value.length
+  const merchant = users.value.filter(u => u.role === 'merchant').length
+  const user = users.value.filter(u => u.role === 'user').length
+  const active = users.value.filter(u => u.is_active).length
+  const inactive = total - active
+  return [
+    { key: 'total', label: '总用户', value: total, color: 'var(--brand)' },
+    { key: 'merchant', label: '商家管理员', value: merchant, color: '#1677ff' },
+    { key: 'user', label: '普通用户', value: user, color: 'var(--green)' },
+    { key: 'inactive', label: '已禁用', value: inactive, color: '#999' },
+  ]
 })
 
 async function fetchUsers() {
@@ -78,7 +97,6 @@ async function fetchUsers() {
     if (!res.ok) throw new Error('获取用户列表失败')
     const data = await res.json()
     users.value = data.users || []
-    total.value = data.total || 0
   } catch (e) {
     error.value = e instanceof Error ? e.message : '未知错误'
   } finally {
@@ -112,7 +130,6 @@ async function handleSave() {
   formError.value = null
   try {
     if (editingId.value === null) {
-      // 创建
       if (!form.value.username || !form.value.password) {
         formError.value = '用户名和密码不能为空'
         saving.value = false
@@ -128,7 +145,6 @@ async function handleSave() {
         throw new Error(data.message || '创建失败')
       }
     } else {
-      // 更新
       const body: Record<string, unknown> = {
         nickname: form.value.nickname,
         role: form.value.role,
@@ -207,10 +223,9 @@ function toggleActive(user: UserInfo) {
   })
 }
 
-function copyPassword(password: string) {
-  navigator.clipboard.writeText(password).then(() => {
-    // 简单提示
-  })
+function formatTime(time: string | null): string {
+  if (!time) return '-'
+  return time.replace('T', ' ').slice(0, 19)
 }
 
 onMounted(() => {
@@ -220,170 +235,205 @@ onMounted(() => {
 
 <template>
   <div class="user-manage">
+    <!-- 页面标题 -->
+    <div class="page-header">
+      <div class="page-header__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </svg>
+      </div>
+      <div class="page-header__text">
+        <h1>用户管理</h1>
+        <p>管理平台普通用户与商家管理员账号，支持启用/禁用、编辑与删除</p>
+      </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats-grid">
+      <div v-for="stat in stats" :key="stat.key" class="stat-card">
+        <span class="stat-value" :style="{ color: stat.color }">{{ stat.value }}</span>
+        <span class="stat-label">{{ stat.label }}</span>
+      </div>
+    </div>
+
     <!-- 工具栏 -->
     <div class="toolbar">
-      <div class="toolbar__left">
+      <div class="toolbar__filters">
         <input
           v-model="keyword"
           class="search-input"
-          placeholder="搜索用户名或昵称..."
-          @input="fetchUsers"
+          placeholder="搜索用户名、昵称、手机号或邮箱..."
+          @keydown.enter="fetchUsers"
         />
-        <select v-model="roleFilter" class="role-select" @change="fetchUsers">
+        <select v-model="roleFilter" class="filter-select" @change="fetchUsers">
           <option value="">全部角色</option>
           <option value="user">普通用户</option>
           <option value="merchant">商家管理员</option>
         </select>
+        <select v-model="statusFilter" class="filter-select" @change="fetchUsers">
+          <option value="">全部状态</option>
+          <option value="active">已启用</option>
+          <option value="inactive">已禁用</option>
+        </select>
       </div>
-      <button class="btn btn--primary" @click="openCreate">+ 新增用户</button>
+      <button class="btn btn--primary" @click="openCreate">
+        <span class="btn-icon">+</span>
+        新增用户
+      </button>
     </div>
 
     <!-- 错误提示 -->
     <div v-if="error" class="alert alert--error">{{ error }}</div>
 
-    <!-- 用户表格 -->
-    <div class="table-wrapper">
-      <table class="user-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>用户名</th>
-            <th>密码</th>
-            <th>昵称</th>
-            <th>角色</th>
-            <th>手机</th>
-            <th>邮箱</th>
-            <th>状态</th>
-            <th>创建时间</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="loading">
-            <td colspan="10" class="loading-cell">加载中...</td>
-          </tr>
-          <tr v-else-if="filteredUsers.length === 0">
-            <td colspan="10" class="empty-cell">暂无用户数据</td>
-          </tr>
-          <tr v-for="user in filteredUsers" :key="user.id">
-            <td>{{ user.id }}</td>
-            <td><strong>{{ user.username }}</strong></td>
-            <td>
-              <span class="password-cell">
-                <code>{{ user.password || '-' }}</code>
-                <button
-                  v-if="user.password"
-                  class="copy-btn"
-                  title="复制密码"
-                  @click="copyPassword(user.password)"
-                ></button>
-              </span>
-            </td>
-            <td>{{ user.nickname }}</td>
-            <td>
-              <span :class="['role-badge', user.role === 'merchant' ? 'role-badge--merchant' : 'role-badge--user']">
-                {{ user.role === 'merchant' ? '商家' : '用户' }}
-              </span>
-            </td>
-            <td>{{ user.phone || '-' }}</td>
-            <td>{{ user.email || '-' }}</td>
-            <td>
-              <button
-                :class="['status-toggle', user.is_active ? 'status-toggle--active' : 'status-toggle--inactive']"
-                @click="toggleActive(user)"
-              >
-                {{ user.is_active ? '启用' : '禁用' }}
-              </button>
-            </td>
-            <td class="time-cell">{{ user.created_at ? user.created_at.slice(0, 19).replace('T', ' ') : '-' }}</td>
-            <td>
-              <div class="action-btns">
-                <button class="btn btn--sm btn--edit" @click="openEdit(user)">编辑</button>
-                <button class="btn btn--sm btn--delete" @click="confirmDelete(user)">删除</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- 加载中 -->
+    <div v-if="loading" class="loading-wrap">
+      <div class="spinner"></div>
+      <p>正在加载用户数据...</p>
     </div>
 
-    <!-- 统计 -->
-    <div class="stats-bar">
-      <span>共 {{ filteredUsers.length }} 个用户</span>
-      <span>商家: {{ users.filter(u => u.role === 'merchant').length }}</span>
-      <span>普通用户: {{ users.filter(u => u.role === 'user').length }}</span>
+    <!-- 用户卡片网格 -->
+    <div v-else-if="filteredUsers.length > 0" class="user-grid">
+      <div v-for="user in filteredUsers" :key="user.id" class="user-card">
+        <div class="user-card__header">
+          <div class="user-card__avatar">
+            {{ user.nickname.charAt(0) || user.username.charAt(0) }}
+          </div>
+          <div class="user-card__info">
+            <div class="user-card__name">{{ user.nickname || user.username }}</div>
+            <div class="user-card__username">@{{ user.username }}</div>
+          </div>
+          <span :class="['status-badge', user.is_active ? 'status-badge--active' : 'status-badge--inactive']">
+            {{ user.is_active ? '启用' : '禁用' }}
+          </span>
+        </div>
+
+        <div class="user-card__meta">
+          <div class="meta-item">
+            <span class="meta-label">角色</span>
+            <span :class="['role-badge', user.role === 'merchant' ? 'role-badge--merchant' : 'role-badge--user']">
+              {{ user.role === 'merchant' ? '商家' : '用户' }}
+            </span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">手机</span>
+            <span class="meta-value">{{ user.phone || '-' }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">邮箱</span>
+            <span class="meta-value">{{ user.email || '-' }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">创建时间</span>
+            <span class="meta-value">{{ formatTime(user.created_at) }}</span>
+          </div>
+        </div>
+
+        <div class="user-card__actions">
+          <button
+            :class="['btn btn--sm', user.is_active ? 'btn--warning' : 'btn--success']"
+            @click="toggleActive(user)"
+          >
+            {{ user.is_active ? '禁用' : '启用' }}
+          </button>
+          <button class="btn btn--sm btn--edit" @click="openEdit(user)">编辑</button>
+          <button class="btn btn--sm btn--delete" @click="confirmDelete(user)">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 空状态 -->
+    <div v-else class="empty-state">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+        </svg>
+      </div>
+      <h3>暂无用户</h3>
+      <p>当前筛选条件下没有找到用户数据</p>
     </div>
 
     <!-- 新增/编辑弹窗 -->
-    <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-      <div class="modal">
-        <div class="modal__header">
-          <h3>{{ modalTitle }}</h3>
-          <button class="modal__close" @click="showModal = false">&times;</button>
-        </div>
-        <div class="modal__body">
-          <div v-if="formError" class="alert alert--error">{{ formError }}</div>
-          <div class="form-grid">
-            <div class="form-group">
-              <label>用户名</label>
-              <input v-model="form.username" :disabled="editingId !== null" placeholder="登录账号" />
-            </div>
-            <div class="form-group">
-              <label>密码</label>
-              <input
-                v-model="form.password"
-                :type="editingId !== null ? 'password' : 'text'"
-                :placeholder="editingId !== null ? '留空则不修改密码' : '至少6位'"
-              />
-            </div>
-            <div class="form-group">
-              <label>昵称</label>
-              <input v-model="form.nickname" placeholder="用户昵称" />
-            </div>
-            <div class="form-group">
-              <label>角色</label>
-              <select v-model="form.role">
-                <option value="user">普通用户</option>
-                <option value="merchant">商家管理员</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>手机号</label>
-              <input v-model="form.phone" placeholder="选填" />
-            </div>
-            <div class="form-group">
-              <label>邮箱</label>
-              <input v-model="form.email" placeholder="选填" />
+    <transition name="modal">
+      <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
+        <div class="modal">
+          <div class="modal__header">
+            <h3>{{ modalTitle }}</h3>
+            <button class="modal__close" @click="showModal = false">×</button>
+          </div>
+          <div class="modal__body">
+            <div v-if="formError" class="alert alert--error">{{ formError }}</div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>用户名 <span class="required">*</span></label>
+                <input v-model="form.username" :disabled="editingId !== null" placeholder="登录账号" />
+              </div>
+              <div class="form-group">
+                <label>{{ editingId !== null ? '新密码' : '密码' }} <span v-if="editingId === null" class="required">*</span></label>
+                <input
+                  v-model="form.password"
+                  type="password"
+                  :placeholder="editingId !== null ? '留空则不修改密码' : '至少6位'"
+                />
+              </div>
+              <div class="form-group">
+                <label>昵称</label>
+                <input v-model="form.nickname" placeholder="用户昵称" />
+              </div>
+              <div class="form-group">
+                <label>角色</label>
+                <select v-model="form.role">
+                  <option value="user">普通用户</option>
+                  <option value="merchant">商家管理员</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>手机号</label>
+                <input v-model="form.phone" placeholder="选填" />
+              </div>
+              <div class="form-group">
+                <label>邮箱</label>
+                <input v-model="form.email" placeholder="选填" />
+              </div>
             </div>
           </div>
-        </div>
-        <div class="modal__footer">
-          <button class="btn btn--secondary" @click="showModal = false">取消</button>
-          <button class="btn btn--primary" :disabled="saving" @click="handleSave">
-            {{ saving ? '保存中...' : '保存' }}
-          </button>
+          <div class="modal__footer">
+            <button class="btn btn--secondary" @click="showModal = false">取消</button>
+            <button class="btn btn--primary" :disabled="saving" @click="handleSave">
+              {{ saving ? '保存中...' : '保存' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </transition>
 
     <!-- 删除确认弹窗 -->
-    <div v-if="deleteTarget" class="modal-overlay" @click.self="deleteTarget = null">
-      <div class="modal modal--sm">
-        <div class="modal__header">
-          <h3>确认删除</h3>
-          <button class="modal__close" @click="deleteTarget = null">&times;</button>
-        </div>
-        <div class="modal__body">
-          <p>确定要删除用户 <strong>{{ deleteTarget.username }}</strong> 吗？此操作不可恢复。</p>
-        </div>
-        <div class="modal__footer">
-          <button class="btn btn--secondary" @click="deleteTarget = null">取消</button>
-          <button class="btn btn--danger" :disabled="deleting" @click="handleDelete">
-            {{ deleting ? '删除中...' : '确认删除' }}
-          </button>
+    <transition name="modal">
+      <div v-if="deleteTarget" class="modal-overlay" @click.self="deleteTarget = null">
+        <div class="modal modal--sm">
+          <div class="modal__header">
+            <h3>确认删除</h3>
+            <button class="modal__close" @click="deleteTarget = null">×</button>
+          </div>
+          <div class="modal__body">
+            <div class="confirm-body">
+              <div class="confirm-icon confirm-icon--danger">×</div>
+              <p class="confirm-text">确定要删除该用户吗？</p>
+              <p class="confirm-hint">用户 <strong>{{ deleteTarget?.nickname || deleteTarget?.username }}</strong> 将被永久删除，此操作不可恢复。</p>
+            </div>
+          </div>
+          <div class="modal__footer">
+            <button class="btn btn--secondary" @click="deleteTarget = null">取消</button>
+            <button class="btn btn--danger" :disabled="deleting" @click="handleDelete">
+              {{ deleting ? '删除中...' : '确认删除' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </transition>
   </div>
 </template>
 
@@ -391,7 +441,77 @@ onMounted(() => {
 .user-manage {
   display: flex;
   flex-direction: column;
+  gap: 24px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.page-header__icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 28px rgba(217, 95, 45, 0.28);
+  flex-shrink: 0;
+}
+
+.page-header__icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.page-header__text h1 {
+  font-size: 28px;
+  margin: 0 0 6px 0;
+  color: var(--ink);
+}
+
+.page-header__text p {
+  color: var(--muted);
+  margin: 0;
+  font-size: 15px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px;
+  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 14px;
+  color: var(--muted);
 }
 
 .toolbar {
@@ -402,20 +522,21 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.toolbar__left {
+.toolbar__filters {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .search-input {
-  padding: 8px 14px;
+  padding: 10px 16px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 14px;
-  width: 240px;
-  background: rgba(255, 255, 255, 0.7);
-  transition: border-color 0.2s;
+  width: 260px;
+  background: var(--panel);
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .search-input:focus {
@@ -424,32 +545,49 @@ onMounted(() => {
   box-shadow: 0 0 0 3px rgba(217, 95, 45, 0.1);
 }
 
-.role-select {
-  padding: 8px 14px;
+.filter-select {
+  padding: 10px 16px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 14px;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--panel);
   cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: var(--brand);
 }
 
 .btn {
-  padding: 8px 18px;
+  padding: 10px 20px;
   border: none;
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.btn-icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
 .btn--primary {
-  background: var(--brand);
-  color: #fffaf0;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(217, 95, 45, 0.25);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: var(--brand-dark);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 26px rgba(217, 95, 45, 0.32);
 }
 
 .btn--secondary {
@@ -472,10 +610,22 @@ onMounted(() => {
   background: #a93226;
 }
 
-.btn--sm {
-  padding: 5px 12px;
-  font-size: 12px;
-  border-radius: 8px;
+.btn--warning {
+  background: rgba(250, 173, 20, 0.12);
+  color: #d48806;
+}
+
+.btn--warning:hover {
+  background: rgba(250, 173, 20, 0.2);
+}
+
+.btn--success {
+  background: rgba(31, 138, 91, 0.12);
+  color: #1f8a5b;
+}
+
+.btn--success:hover {
+  background: rgba(31, 138, 91, 0.2);
 }
 
 .btn--edit {
@@ -496,96 +646,154 @@ onMounted(() => {
   background: rgba(192, 57, 43, 0.15);
 }
 
+.btn--sm {
+  padding: 7px 14px;
+  font-size: 13px;
+  border-radius: 10px;
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 .alert {
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
 }
 
 .alert--error {
-  background: #fdeceb;
-  color: #c0392b;
-  border: 1px solid rgba(192, 57, 43, 0.2);
+  background: #fff0f0;
+  color: #c33;
+  border: 1px solid rgba(192, 57, 43, 0.15);
 }
 
-.table-wrapper {
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel);
-}
-
-.user-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.user-table th {
-  padding: 12px 14px;
-  text-align: left;
-  font-size: 12px;
-  font-weight: 700;
+.loading-wrap {
+  text-align: center;
+  padding: 60px 20px;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--line);
-  background: rgba(0, 0, 0, 0.02);
+}
+
+.spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.user-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.user-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(217, 95, 45, 0.3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.user-card__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.user-card__avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark, #8a3a1f));
+  color: #fff;
+  display: inline-grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.user-card__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-card__name {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.user-table td {
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-  vertical-align: middle;
-}
-
-.user-table tr:last-child td {
-  border-bottom: none;
-}
-
-.user-table tr:hover td {
-  background: rgba(217, 95, 45, 0.03);
-}
-
-.loading-cell, .empty-cell {
-  text-align: center;
-  padding: 40px 20px !important;
+.user-card__username {
+  font-size: 13px;
   color: var(--muted);
-  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.password-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.password-cell code {
-  font-family: 'SF Mono', 'Fira Code', monospace;
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
   font-size: 12px;
-  background: rgba(0, 0, 0, 0.04);
-  padding: 2px 8px;
-  border-radius: 6px;
+  font-weight: 700;
 }
 
-.copy-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
+.status-badge--active {
+  background: rgba(31, 138, 91, 0.12);
+  color: #1f8a5b;
+}
+
+.status-badge--inactive {
+  background: rgba(192, 57, 43, 0.1);
+  color: #c0392b;
+}
+
+.user-card__meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meta-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.meta-value {
   font-size: 14px;
-  padding: 2px;
-  opacity: 0.5;
-  transition: opacity 0.2s;
-}
-
-.copy-btn:hover {
-  opacity: 1;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .role-badge {
@@ -594,6 +802,7 @@ onMounted(() => {
   border-radius: 20px;
   font-size: 12px;
   font-weight: 600;
+  width: fit-content;
 }
 
 .role-badge--merchant {
@@ -606,82 +815,81 @@ onMounted(() => {
   color: #666;
 }
 
-.status-toggle {
-  padding: 4px 12px;
-  border: none;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.status-toggle--active {
-  background: rgba(31, 138, 91, 0.1);
-  color: #1f8a5b;
-}
-
-.status-toggle--active:hover {
-  background: rgba(31, 138, 91, 0.2);
-}
-
-.status-toggle--inactive {
-  background: rgba(192, 57, 43, 0.1);
-  color: #c0392b;
-}
-
-.status-toggle--inactive:hover {
-  background: rgba(192, 57, 43, 0.2);
-}
-
-.time-cell {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.action-btns {
+.user-card__actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
-.stats-bar {
+.empty-state {
   display: flex;
-  gap: 20px;
-  font-size: 13px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
   color: var(--muted);
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.empty-icon {
+  width: 76px;
+  height: 76px;
+  color: var(--line);
+  margin-bottom: 16px;
+}
+
+.empty-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.empty-state h3 {
+  font-size: 20px;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.empty-state p {
+  font-size: 14px;
+  margin: 0;
 }
 
 /* 弹窗 */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
-  backdrop-filter: blur(4px);
+  z-index: 100;
+  padding: 20px;
+  backdrop-filter: blur(3px);
 }
 
 .modal {
   background: var(--panel);
-  border-radius: 18px;
-  width: min(560px, 90vw);
-  max-height: 85vh;
-  overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  border-radius: 20px;
+  width: min(520px, 100%);
+  max-height: 90vh;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
 }
 
 .modal--sm {
-  width: min(400px, 90vw);
+  width: min(420px, 100%);
 }
 
 .modal__header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px 0;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line);
 }
 
 .modal__header h3 {
@@ -691,27 +899,28 @@ onMounted(() => {
 }
 
 .modal__close {
-  background: none;
+  width: 32px;
+  height: 32px;
   border: none;
-  font-size: 24px;
-  cursor: pointer;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.05);
   color: var(--muted);
-  padding: 0 4px;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
 }
 
 .modal__close:hover {
+  background: rgba(0, 0, 0, 0.12);
   color: var(--ink);
 }
 
 .modal__body {
-  padding: 20px 24px;
-}
-
-.modal__body p {
-  margin: 0;
-  font-size: 14px;
-  color: var(--ink);
-  line-height: 1.6;
+  padding: 24px;
+  overflow-y: auto;
 }
 
 .modal__footer {
@@ -724,7 +933,7 @@ onMounted(() => {
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 16px;
 }
 
 .form-group {
@@ -739,15 +948,19 @@ onMounted(() => {
   color: var(--ink);
 }
 
+.required {
+  color: var(--brand);
+}
+
 .form-group input,
 .form-group select {
-  padding: 9px 12px;
+  padding: 11px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 14px;
   font-family: inherit;
-  background: rgba(255, 255, 255, 0.7);
-  transition: border-color 0.2s;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .form-group input:focus,
@@ -762,19 +975,72 @@ onMounted(() => {
   color: var(--muted);
 }
 
-@media (max-width: 760px) {
-  .form-grid {
-    grid-template-columns: 1fr;
+.confirm-body {
+  text-align: center;
+  padding: 8px 8px 16px;
+}
+
+.confirm-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 32px;
+  display: inline-grid;
+  place-items: center;
+  margin-bottom: 16px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+}
+
+.confirm-icon--danger {
+  background: linear-gradient(135deg, #c0392b, #a93226);
+}
+
+.confirm-text {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.confirm-hint {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+
+@media (max-width: 820px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
+
   .toolbar {
     flex-direction: column;
     align-items: stretch;
   }
-  .toolbar__left {
+
+  .toolbar__filters {
     flex-direction: column;
   }
-  .search-input {
+
+  .search-input,
+  .filter-select {
     width: 100%;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

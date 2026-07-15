@@ -307,26 +307,34 @@ onUnmounted(() => {
                 :class="{
                   'bg-gradient-to-br from-primary to-primary-dark': msg.sender_role === 'merchant',
                   'bg-gradient-to-br from-accent-blue to-primary': msg.sender_role === 'user',
-                  'bg-gradient-to-br from-primary-light to-accent-blue': msg.sender_role === 'ai',
+                  'bg-gradient-to-br from-green-400 to-emerald-500': msg.sender_role === 'ai',
                 }"
               >
                 <SparklesIcon v-if="msg.sender_role === 'ai'" class="w-4 h-4" />
                 <span v-else class="text-xs font-bold">{{ senderLabel(msg.sender_role) }}</span>
               </div>
 
-              <div
-                v-if="msg.sender_role === 'ai'"
-                class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] leading-relaxed shadow-sm bg-primary-light/40 text-gray-800 border border-primary-light/60 rounded-br-sm text-left"
-                v-html="renderMarkdown(msg.content)"
-              ></div>
-              <div
-                v-else
-                class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-[70%] whitespace-pre-wrap leading-relaxed shadow-sm text-left"
-                :class="msg.sender_role === 'merchant'
-                  ? 'bg-gradient-to-r from-primary to-primary-dark text-white rounded-br-sm'
-                  : 'bg-white text-gray-800 border border-primary-light/50 rounded-bl-sm'"
-              >
-                {{ msg.content }}
+              <div class="max-w-[78%]">
+                <div
+                  v-if="msg.sender_role === 'ai'"
+                  class="text-xs text-green-600 mb-1 text-left"
+                >
+                  智能客服
+                </div>
+                <div
+                  v-if="msg.sender_role === 'ai'"
+                  class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-full leading-relaxed shadow-sm bg-green-50 text-gray-800 border border-green-100 rounded-bl-sm text-left"
+                  v-html="renderMarkdown(msg.content)"
+                ></div>
+                <div
+                  v-else
+                  class="inline-block px-4 py-2.5 rounded-2xl text-sm max-w-full whitespace-pre-wrap leading-relaxed shadow-sm text-left"
+                  :class="msg.sender_role === 'merchant'
+                    ? 'bg-gradient-to-r from-primary to-primary-dark text-white rounded-br-sm'
+                    : 'bg-white text-gray-800 border border-primary-light/50 rounded-bl-sm'"
+                >
+                  {{ msg.content }}
+                </div>
               </div>
             </div>
             <p

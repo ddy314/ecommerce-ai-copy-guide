@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, inject, watch, type Ref } from 'vue'
+import { ref, computed, onMounted, inject, watch, nextTick, type Ref } from 'vue'
+import CheckoutModal, { type CheckoutItem } from './CheckoutModal.vue'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -52,6 +53,7 @@ const products = ref<Product[]>([])
 const categories = ref<string[]>([])
 const categoryCounts = ref<Record<string, number>>({})
 const total = ref(0)
+const totalAll = ref(0)
 const totalPages = ref(1)
 const currentPage = ref(1)
 const pageSize = ref(20)
@@ -66,6 +68,11 @@ const detailProduct = ref<ProductDetail | null>(null)
 const detailQuantity = ref(1)
 const isFavorited = ref(false)
 const activeImageUrl = ref<string>('')
+
+// 立即购买结算弹窗
+const checkoutVisible = ref(false)
+const checkoutItems = ref<CheckoutItem[]>([])
+
 
 // 提示
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -160,6 +167,7 @@ async function loadProducts() {
     categories.value = data.categories || []
     categoryCounts.value = data.category_counts || {}
     total.value = data.total || 0
+    totalAll.value = data.total_all || data.total || 0
     totalPages.value = data.total_pages || 1
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载商品失败'
@@ -237,6 +245,9 @@ async function openDetailById(productId: number) {
   isFavorited.value = false
   activeImageUrl.value = ''
 
+  // 滚动到页面顶部，确保用户能看到弹窗
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+
   recordHistory(productId)
 
   try {
@@ -256,17 +267,15 @@ async function openDetailById(productId: number) {
   }
 }
 
-// 监听外部跳转商品详情（收藏 / 浏览记录 / AI 聊天）
+// 监听外部跳转商品详情（AI 聊天等场景：组件已挂载时 ref 变化）
 watch(
   targetProductId,
   (newId) => {
     if (newId) {
       openDetailById(newId)
-      // 消费后重置，避免重复触发
       targetProductId.value = null
     }
   },
-  { immediate: true },
 )
 
 // ---------- 加入购物车 ----------
@@ -300,9 +309,30 @@ function handleAddToCartFromDetail() {
 // ---------- 立即购买 ----------
 function handleBuyNow() {
   if (!detailProduct.value) return
-  addToCart(detailProduct.value.id, detailQuantity.value)
+  const product = detailProduct.value
+  checkoutItems.value = [
+    {
+      product_id: product.id,
+      product_name: product.name,
+      product_image: product.image_url || null,
+      product_price: product.price,
+      product_category: product.category || null,
+      quantity: detailQuantity.value,
+    },
+  ]
+  checkoutVisible.value = true
+}
+
+function closeCheckout() {
+  checkoutVisible.value = false
+}
+
+function onCheckoutSuccess() {
+  checkoutVisible.value = false
   closeDetail()
-  navigate('cart')
+  showToast('下单成功！')
+  // 跳转个人中心，用户可在「我的订单」中查看
+  navigate('profile')
 }
 
 // ---------- 询问客服 ----------
@@ -376,6 +406,24 @@ function formatSpecs(specs: ProductDetail['specs']): Array<[string, string]> {
 
 onMounted(() => {
   loadProducts()
+  // 从 sessionStorage 读取跳转目标（个人中心 / AI 聊天等跨组件跳转）
+  const storedId = sessionStorage.getItem('targetProductId')
+  if (storedId) {
+    const pid = Number(storedId)
+    sessionStorage.removeItem('targetProductId')
+    // 同时清除注入的 ref，避免 watch 重复触发
+    targetProductId.value = null
+    if (!Number.isNaN(pid) && pid > 0) {
+      openDetailById(pid)
+      return
+    }
+  }
+  // 兜底：注入的 targetProductId（无 sessionStorage 时）
+  if (targetProductId.value) {
+    const pid = targetProductId.value
+    targetProductId.value = null
+    openDetailById(pid)
+  }
 })
 </script>
 
@@ -415,9 +463,16 @@ onMounted(() => {
     <!-- 类目筛选 -->
     <div class="pb-categories">
       <button
+        :class="['pb-cat', { active: selectedCategory === '' }]"
+        @click="selectCategory('')"
+      >
+        全部
+        <span v-if="totalAll" class="pb-cat__count">{{ totalAll }}</span>
+      </button>
+      <button
         v-for="cat in categories"
         :key="cat"
-        :class="['pb-cat', { active: selectedCategory === cat || (!selectedCategory && cat === categories[0]) }]"
+        :class="['pb-cat', { active: selectedCategory === cat }]"
         @click="selectCategory(cat)"
       >
         {{ cat }}
@@ -512,7 +567,8 @@ onMounted(() => {
       <span class="pb-page-info">第 {{ currentPage }} / {{ totalPages }} 页，共 {{ total }} 件</span>
     </div>
 
-    <!-- 商品详情弹窗 -->
+    <!-- 商品详情弹窗 — Teleport 到 body 避免 ancestor transform 干扰 fixed 定位 -->
+    <Teleport to="body">
     <transition name="modal">
       <div v-if="detailVisible" class="pb-modal-overlay" @click.self="closeDetail">
         <div class="pb-modal">
@@ -690,6 +746,16 @@ onMounted(() => {
         </div>
       </div>
     </transition>
+    </Teleport>
+
+    <!-- 立即购买结算弹窗 -->
+    <CheckoutModal
+      :visible="checkoutVisible"
+      :items="checkoutItems"
+      mode="buy-now"
+      @close="closeCheckout"
+      @success="onCheckoutSuccess"
+    />
   </div>
 </template>
 

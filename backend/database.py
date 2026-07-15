@@ -107,10 +107,12 @@ def init_db() -> None:
     # 1. 先补齐所有缺失的数据库字段（避免后续数据迁移因字段不存在而失败）
     _add_password_plain_column()
     _add_product_media_columns()
+    _add_review_media_columns()
     _add_product_published_column()
     _add_order_extra_columns()
     _add_display_id_columns()
     _add_review_user_id_column()
+    _add_cs_sender_id_column()
     # 2. 数据迁移：将残留明文密码哈希化并清空明文
     _hash_existing_plain_passwords()
     # 3. 规范化已有订单编号
@@ -215,6 +217,34 @@ def _add_product_media_columns() -> None:
         logger.warning(f"添加 product media 字段失败: {e}")
 
 
+def _add_review_media_columns() -> None:
+    """为已有 reviews 表添加 image_urls / videos 字段（如果不存在）"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        if "reviews" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("reviews")]
+        with engine.connect() as conn:
+            if "image_urls" not in columns:
+                if DATABASE_URL.startswith("sqlite"):
+                    conn.execute(text("ALTER TABLE reviews ADD COLUMN image_urls JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE reviews ADD COLUMN image_urls JSONB"))
+                logger.info("已为 reviews 表添加 image_urls 字段")
+            if "videos" not in columns:
+                if DATABASE_URL.startswith("sqlite"):
+                    conn.execute(text("ALTER TABLE reviews ADD COLUMN videos JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE reviews ADD COLUMN videos JSONB"))
+                logger.info("已为 reviews 表添加 videos 字段")
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"添加 review media 字段失败: {e}")
+
+
 def _add_order_extra_columns() -> None:
     """为已有 orders 表添加物流、售后与状态时间字段（如果不存在）"""
     try:
@@ -231,6 +261,7 @@ def _add_order_extra_columns() -> None:
             col_defs = [
                 ("tracking_no", "VARCHAR(100)"),
                 ("return_tracking_no", "VARCHAR(100)"),
+                ("exchange_tracking_no", "VARCHAR(100)"),
                 ("return_status", "VARCHAR(20)"),
                 ("return_reason", "VARCHAR(500)"),
                 ("return_applied_at", "TIMESTAMP" if is_pg else "DateTime"),
@@ -300,6 +331,25 @@ def _add_review_user_id_column() -> None:
             logger.info("已为 reviews 表添加 user_id 字段")
     except Exception as e:
         logger.warning(f"添加 reviews.user_id 字段失败: {e}")
+
+
+def _add_cs_sender_id_column() -> None:
+    """为已有 customer_service_messages 表添加 sender_id 字段（如果不存在）"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        if "customer_service_messages" not in inspector.get_table_names():
+            return
+
+        columns = [c["name"] for c in inspector.get_columns("customer_service_messages")]
+        if "sender_id" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE customer_service_messages ADD COLUMN sender_id INTEGER"))
+                conn.commit()
+            logger.info("已为 customer_service_messages 表添加 sender_id 字段")
+    except Exception as e:
+        logger.warning(f"添加 customer_service_messages.sender_id 字段失败: {e}")
 
 
 def _hash_existing_plain_passwords() -> None:

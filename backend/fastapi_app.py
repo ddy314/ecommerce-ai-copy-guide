@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Dep
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 
 from backend.database import SessionLocal, init_db
 from backend.models.product import Product
@@ -352,17 +352,47 @@ def update_profile(req: UpdateProfileRequest, user: dict = Depends(get_current_u
 @app.get("/api/products")
 def list_products(category: str = "", keyword: str = "", page: int = 1, page_size: int = 20):
     with SessionLocal() as db:
+        # 基础过滤（仅 keyword，用于查询当前页数据）
         stmt = select(Product)
         if keyword:
             stmt = stmt.where(Product.name.contains(keyword))
+
+        # 1. 全部商品总数（不受 category 影响，用于「全部」分类计数）
+        total_all = db.execute(
+            select(func.count(Product.id)).select_from(Product)
+            .where(Product.name.contains(keyword) if keyword else True)
+        ).scalar() or 0
+
+        # 2. 各分类实际数量
+        category_counts_query = (
+            select(Product.category, func.count(Product.id))
+            .select_from(Product)
+            .where((Product.category.isnot(None)) & (Product.category != ""))
+        )
+        if keyword:
+            category_counts_query = category_counts_query.where(Product.name.contains(keyword))
+        category_counts_query = category_counts_query.group_by(Product.category)
+        category_counts = {row[0]: row[1] for row in db.execute(category_counts_query).all()}
+        categories = list(category_counts.keys())
+
+        # 3. 当前筛选条件下的总数与分页数据
         if category:
             stmt = stmt.where(Product.category == category)
-        all_products = list(db.execute(stmt).scalars().all())
-        total = len(all_products)
-        products = all_products[(page - 1) * page_size: page * page_size]
-        categories = list(set(p.category for p in all_products if p.category))
-        total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
-        return {"total": total, "page": page, "page_size": page_size, "total_pages": total_pages, "categories": categories, "products": [p.to_dict() for p in products]}
+        filtered_products = list(db.execute(stmt).scalars().all())
+        total_filtered = len(filtered_products)
+        products = filtered_products[(page - 1) * page_size: page * page_size]
+        total_pages = (total_filtered + page_size - 1) // page_size if page_size > 0 else 1
+
+        return {
+            "total": total_filtered,
+            "total_all": total_all,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "categories": categories,
+            "category_counts": category_counts,
+            "products": [p.to_dict() for p in products],
+        }
 
 
 @app.get("/api/products/{product_id}")

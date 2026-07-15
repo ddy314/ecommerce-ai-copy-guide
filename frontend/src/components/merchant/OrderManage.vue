@@ -45,6 +45,11 @@ interface Order {
   address_snapshot: AddressSnapshot | null
   tracking_no?: string | null
   return_tracking_no?: string | null
+  exchange_tracking_no?: string | null
+  return_status?: string | null
+  return_reason?: string | null
+  return_applied_at?: string | null
+  return_completed_at?: string | null
 }
 
 interface StatusCounts {
@@ -81,6 +86,17 @@ const shipTrackingNo = ref('')
 // 取消弹窗
 const cancelModalVisible = ref(false)
 const pendingCancelOrder = ref<Order | null>(null)
+
+// 退货/换货弹窗
+const returnModalVisible = ref(false)
+const exchangeModalVisible = ref(false)
+const pendingReturnOrder = ref<Order | null>(null)
+const pendingExchangeOrder = ref<Order | null>(null)
+const exchangeTrackingNo = ref('')
+
+// 退货/换货处理中状态
+const returningIds = ref<Set<number>>(new Set())
+const exchangingIds = ref<Set<number>>(new Set())
 
 // 提示 Toast
 const toast = ref<{ visible: boolean; message: string; type: 'success' | 'error' }>({
@@ -286,6 +302,87 @@ async function executeCancelOrder() {
   }
 }
 
+// ---------- 退货确认 ----------
+function openReturnModal(order: Order) {
+  pendingReturnOrder.value = order
+  returnModalVisible.value = true
+}
+
+function closeReturnModal() {
+  returnModalVisible.value = false
+  pendingReturnOrder.value = null
+}
+
+async function executeConfirmReturn() {
+  const order = pendingReturnOrder.value
+  if (!order) return
+  closeReturnModal()
+  if (returningIds.value.has(order.id)) return
+  returningIds.value.add(order.id)
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/merchant/orders/${order.id}/confirm-return`,
+      { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }) },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${res.status}`)
+    }
+    showToast('退货已确认，退款已自动处理', 'success')
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '确认退货失败', 'error')
+  } finally {
+    returningIds.value.delete(order.id)
+  }
+}
+
+// ---------- 换货确认 ----------
+function openExchangeModal(order: Order) {
+  pendingExchangeOrder.value = order
+  exchangeTrackingNo.value = order.exchange_tracking_no || ''
+  exchangeModalVisible.value = true
+}
+
+function closeExchangeModal() {
+  exchangeModalVisible.value = false
+  pendingExchangeOrder.value = null
+  exchangeTrackingNo.value = ''
+}
+
+async function executeConfirmExchange() {
+  const order = pendingExchangeOrder.value
+  if (!order) return
+  const trackingNo = exchangeTrackingNo.value.trim()
+  if (!trackingNo) {
+    showToast('请填写新换货物的快递单号', 'error')
+    return
+  }
+  closeExchangeModal()
+  if (exchangingIds.value.has(order.id)) return
+  exchangingIds.value.add(order.id)
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/merchant/orders/${order.id}/confirm-exchange`,
+      {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ tracking_no: trackingNo }),
+      },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.message || `HTTP ${res.status}`)
+    }
+    showToast('换货已确认，新商品已发货', 'success')
+    await loadOrders()
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '确认换货失败', 'error')
+  } finally {
+    exchangingIds.value.delete(order.id)
+  }
+}
+
 // ---------- 格式化 ----------
 function formatPrice(val: number | null | undefined): string {
   if (val === null || val === undefined) return '--'
@@ -436,11 +533,22 @@ onMounted(() => {
         <div class="om-card__footer">
           <div class="om-card__total">
             <div>共 {{ itemCount(order) }} 件商品，合计：<strong>¥{{ formatPrice(order.total_amount) }}</strong></div>
+            <div v-if="order.return_reason || order.return_applied_at" class="om-card__aftersale">
+              <div v-if="order.return_reason" class="om-card__aftersale-reason">
+                退换原因：{{ order.return_reason }}
+              </div>
+              <div v-if="order.return_applied_at" class="om-card__aftersale-time">
+                申请时间：{{ formatTime(order.return_applied_at) }}
+              </div>
+            </div>
             <div v-if="order.tracking_no" class="om-card__tracking">
               快递单号：{{ order.tracking_no }}
             </div>
             <div v-if="order.return_tracking_no" class="om-card__tracking om-card__tracking--return">
               退货单号：{{ order.return_tracking_no }}
+            </div>
+            <div v-if="order.exchange_tracking_no" class="om-card__tracking om-card__tracking--exchange">
+              换货单号：{{ order.exchange_tracking_no }}
             </div>
           </div>
           <div class="om-card__actions">
@@ -452,8 +560,24 @@ onMounted(() => {
             >
               {{ shippingIds.has(order.id) ? '发货中...' : '发货' }}
             </button>
+            <template v-if="order.status === 'returning' && order.return_status === 'returning'">
+              <button
+                class="om-btn om-btn--danger"
+                :disabled="returningIds.has(order.id)"
+                @click="openReturnModal(order)"
+              >
+                {{ returningIds.has(order.id) ? '处理中...' : '确认退货' }}
+              </button>
+              <button
+                class="om-btn om-btn--warning"
+                :disabled="exchangingIds.has(order.id)"
+                @click="openExchangeModal(order)"
+              >
+                {{ exchangingIds.has(order.id) ? '处理中...' : '确认换货' }}
+              </button>
+            </template>
             <button
-              v-if="!['completed', 'cancelled'].includes(order.status)"
+              v-if="!['completed', 'cancelled', 'returned', 'returning'].includes(order.status)"
               class="om-btn om-btn--danger"
               :disabled="cancellingIds.has(order.id)"
               @click="openCancelModal(order)"
@@ -551,6 +675,80 @@ onMounted(() => {
             <div class="om-confirm-actions">
               <button class="om-btn om-btn--ghost" @click="closeCancelModal">再想想</button>
               <button class="om-btn om-btn--danger" @click="executeCancelOrder">确认取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 确认退货弹窗 -->
+    <transition name="om-modal">
+      <div v-if="returnModalVisible" class="om-modal-overlay" @click.self="closeReturnModal">
+        <div class="om-modal om-modal--sm">
+          <div class="om-modal__header">
+            <h2>确认退货并退款</h2>
+            <button class="om-modal__close" @click="closeReturnModal">×</button>
+          </div>
+          <div class="om-modal__body">
+            <div class="om-confirm-body">
+              <div class="om-confirm-icon om-confirm-icon--danger">↺</div>
+              <p class="om-confirm-text">确定同意该退货申请吗？</p>
+              <p class="om-confirm-hint">确认后系统将自动按原支付方式退款给用户，订单进入售后完成状态。</p>
+              <div v-if="pendingReturnOrder" class="om-cancel-order-info">
+                <span>订单号：{{ pendingReturnOrder.order_no }}</span>
+                <span>退货单号：{{ pendingReturnOrder.return_tracking_no || '--' }}</span>
+                <span>退款金额：<strong>¥{{ formatPrice(pendingReturnOrder.total_amount) }}</strong></span>
+              </div>
+            </div>
+            <div class="om-confirm-actions">
+              <button class="om-btn om-btn--ghost" @click="closeReturnModal">再想想</button>
+              <button
+                class="om-btn om-btn--danger"
+                :disabled="returningIds.has(pendingReturnOrder?.id ?? -1)"
+                @click="executeConfirmReturn"
+              >
+                {{ returningIds.has(pendingReturnOrder?.id ?? -1) ? '处理中...' : '确认退货并退款' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 确认换货弹窗 -->
+    <transition name="om-modal">
+      <div v-if="exchangeModalVisible" class="om-modal-overlay" @click.self="closeExchangeModal">
+        <div class="om-modal om-modal--sm">
+          <div class="om-modal__header">
+            <h2>确认换货并发货</h2>
+            <button class="om-modal__close" @click="closeExchangeModal">×</button>
+          </div>
+          <div class="om-modal__body">
+            <div class="om-form-group">
+              <label>订单号</label>
+              <div class="om-form-static">{{ pendingExchangeOrder?.order_no }}</div>
+            </div>
+            <div class="om-form-group">
+              <label>新换货快递单号 <span class="om-required">*</span></label>
+              <input
+                v-model="exchangeTrackingNo"
+                type="text"
+                placeholder="例如：顺丰 SF1234567890"
+                @keydown.enter="executeConfirmExchange"
+              />
+            </div>
+            <div class="om-confirm-hint" style="margin-top: -8px; margin-bottom: 18px;">
+              确认后订单将重新进入已发货状态，用户可正常确认收货。
+            </div>
+            <div class="om-confirm-actions">
+              <button class="om-btn om-btn--ghost" @click="closeExchangeModal">取消</button>
+              <button
+                class="om-btn om-btn--warning"
+                :disabled="!exchangeTrackingNo.trim() || exchangingIds.has(pendingExchangeOrder?.id ?? -1)"
+                @click="executeConfirmExchange"
+              >
+                {{ exchangingIds.has(pendingExchangeOrder?.id ?? -1) ? '处理中...' : '确认换货' }}
+              </button>
             </div>
           </div>
         </div>
@@ -906,6 +1104,28 @@ onMounted(() => {
   color: #faad14;
 }
 
+.om-card__tracking--exchange {
+  color: #1677ff;
+}
+
+.om-card__aftersale {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(250, 173, 20, 0.08);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.om-card__aftersale-reason {
+  font-weight: 600;
+}
+
+.om-card__aftersale-time {
+  color: var(--muted);
+}
+
 .om-card__actions {
   display: flex;
   gap: 10px;
@@ -948,6 +1168,17 @@ onMounted(() => {
 .om-btn--danger:hover:not(:disabled) {
   background: #a52a2a;
   border-color: #a52a2a;
+}
+
+.om-btn--warning {
+  color: #fff;
+  background: #faad14;
+  border-color: #faad14;
+}
+
+.om-btn--warning:hover:not(:disabled) {
+  background: #d48806;
+  border-color: #d48806;
 }
 
 /* 搜索栏 */
@@ -1169,6 +1400,11 @@ onMounted(() => {
 .om-confirm-icon--warning {
   background: linear-gradient(135deg, #faad14, #f59e0b);
   box-shadow: 0 12px 30px rgba(250, 173, 20, 0.25);
+}
+
+.om-confirm-icon--danger {
+  background: linear-gradient(135deg, #c33, #a52a2a);
+  box-shadow: 0 12px 30px rgba(204, 51, 51, 0.25);
 }
 
 .om-confirm-text {

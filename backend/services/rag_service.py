@@ -17,8 +17,11 @@ from backend.database import SessionLocal
 from backend.models.knowledge_base import KnowledgeEntry, QARecord
 from backend.models.product import Product
 from backend.models.review import Review
+from backend.schemas.requests import GuideQARequest
+from backend.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger(__name__)
+ai_service = get_ai_provider()
 
 # 多路召回路径权重
 RECALL_PATH_WEIGHTS = {
@@ -55,6 +58,20 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
                 "篮球", "足球", "羽毛球", "自行车", "滑板", "泳衣", "运动"],
     "生活用品": ["保温杯", "水杯", "马克杯", "雨伞", "收纳盒", "毛巾",
                "牙刷", "梳子", "镜子", "挂钩", "垃圾袋", "纸巾"],
+}
+
+
+# ===== 适用人群/场景关键词 =====
+AUDIENCE_KEYWORDS: dict[str, list[str]] = {
+    "学生": ["学生", "大学生", "高中生", "初中生", "校园", "宿舍", "学习"],
+    "女生": ["女生", "女士", "女款", "女性", "粉色", "可爱", "小巧"],
+    "男生": ["男生", "男士", "男款", "男性", "运动", "游戏"],
+    "儿童": ["儿童", "小孩", "孩子", "宝宝", "幼儿", "婴儿", "母婴"],
+    "老人": ["老人", "老年人", "长辈", "父母", "爸妈"],
+    "运动": ["运动", "跑步", "健身", "瑜伽", "户外", "骑行", "游泳"],
+    "游戏": ["游戏", "电竞", "吃鸡", "王者", "低延迟"],
+    "办公": ["办公", "商务", "会议", "通勤", "职场"],
+    "送礼": ["送礼", "礼物", "礼品", "送人", "礼盒"],
 }
 
 
@@ -258,57 +275,67 @@ class RAGService:
 
         q_type = self._detect_question_type(question)
 
+        # 提取价格约束（如 300元以内 -> (0, 300)）
+        price_constraint = self._extract_price_constraint(question)
+
         # 获取商品数据
         product: Optional[Product] = None
         related_products: list[Product] = []
         reviews: list[Review] = []
         knowledge_context = ""
+        rag_failed = False
 
-        with SessionLocal() as db:
-            if effective_product_id:
-                product = db.get(Product, effective_product_id)
-            else:
-                # 多路召回 + Rerank 选出最佳商品
-                candidates = self._multi_path_recall_products(db, enriched_question)
-                # 如果有继承分类，优先在分类内排序
-                if inherited_category:
-                    for i, (p, score, path) in enumerate(candidates):
-                        if p.category == inherited_category:
-                            candidates[i] = (p, score + 3.0, path)
-                product = self._rerank_best_product(db, candidates)
-
-            if product:
-                # 获取真实评论
-                reviews = list(
-                    db.execute(
-                        select(Review)
-                        .where(Review.product_id == product.id)
-                        .order_by(Review.created_at.desc())
-                        .limit(10)
+        try:
+            with SessionLocal() as db:
+                if effective_product_id:
+                    product = db.get(Product, effective_product_id)
+                else:
+                    # 多路召回 + Rerank 选出最佳商品
+                    candidates = self._multi_path_recall_products(
+                        db, enriched_question, price_constraint=price_constraint
                     )
-                    .scalars()
-                    .all()
-                )
+                    # 如果有继承分类，优先在分类内排序
+                    if inherited_category:
+                        for i, (p, score, path) in enumerate(candidates):
+                            if p.category == inherited_category:
+                                candidates[i] = (p, score + 3.0, path)
+                    product = self._rerank_best_product(db, candidates)
 
-                # 获取同类推荐商品
-                related_products = list(
-                    db.execute(
-                        select(Product)
-                        .where(
-                            Product.category == product.category,
-                            Product.id != product.id,
+                # 安全兜底：自由搜索场景下，主商品必须满足用户的价格约束
+                if product and not effective_product_id and price_constraint:
+                    if not self._matches_price_constraint(product.price, price_constraint):
+                        product = None
+
+                if product:
+                    # 获取真实评论
+                    reviews = list(
+                        db.execute(
+                            select(Review)
+                            .where(Review.product_id == product.id)
+                            .order_by(Review.created_at.desc())
+                            .limit(10)
                         )
-                        .order_by(Product.rating.desc())
-                        .limit(5)
+                        .scalars()
+                        .all()
                     )
-                    .scalars()
-                    .all()
-                )
 
-                # 检索商品知识库，获取相关上下文
-                knowledge_context = self._retrieve_knowledge_context(
-                    db, enriched_question, product
-                )
+                    # 售后类问题不展示同类推荐
+                    if q_type != "after_sale":
+                        related_products = self._get_related_products(
+                            db, product, enriched_question, price_constraint=price_constraint
+                        )
+
+                    # 检索商品知识库，获取相关上下文
+                    knowledge_context = self._retrieve_knowledge_context(
+                        db, enriched_question, product
+                    )
+        except Exception as e:
+            logger.warning(f"RAG 检索商品数据失败，降级到 AI 回答: {e}")
+            product = None
+            related_products = []
+            reviews = []
+            knowledge_context = ""
+            rag_failed = True
 
         # 构建回答
         if product:
@@ -322,9 +349,9 @@ class RAGService:
             )
             source = "data_rag"
         else:
-            # 数据库没有匹配商品，尝试通用回答
-            answer = self._build_no_match_answer(enriched_question, q_type)
-            source = "fallback"
+            # 数据库没有匹配商品或检索失败，调用 AI 生成自然回答
+            answer = self._build_ai_fallback_answer(question, q_type, rag_failed)
+            source = "ai_fallback"
 
         # 记录问答（使用原始问题，而非补全后的问题）
         try:
@@ -344,7 +371,7 @@ class RAGService:
 
         # 构建相关推荐信息
         related_info = []
-        for p in related_products[:3]:
+        for p in related_products[:5]:
             related_info.append({
                 "id": p.id,
                 "name": p.name,
@@ -352,6 +379,7 @@ class RAGService:
                 "rating": p.rating or 5.0,
                 "category": p.category or "",
                 "image_url": p.image_url or "",
+                "brand": self._get_real_brand(p),
             })
 
         # 构建主商品信息（供前端渲染可点击卡片）
@@ -408,6 +436,91 @@ class RAGService:
         primary_kws = list(set(primary_kws))
         primary_kws.sort(key=len, reverse=True)
         return primary_kws
+
+    def _extract_price_constraint(
+        self, question: str
+    ) -> tuple[float | None, float | None] | None:
+        """从问题中提取价格约束，返回 (min_price, max_price)
+
+        支持：
+        - 300元以内 / 300以内 / 300以下 / 不到300 / 不超过300 / 预算300 -> max=300
+        - 300元以上 / 300以上 / 超过300 -> min=300
+        - 200-300元 / 200到300 / 200~300 / 200至300 -> min=200, max=300
+        - 300左右 / 300块钱左右 -> min=200, max=450（宽松约束）
+        """
+        q = question.lower()
+
+        # 1. 范围匹配：200-300、200到300、200~300、200至300
+        range_patterns = [
+            r"(\d+)\s*[\-~到至]\s*(\d+)\s*(?:元|块|块钱)?",
+            r"(\d+)\s*(?:元|块|块钱)\s*[\-~到至]\s*(\d+)\s*(?:元|块|块钱)?",
+        ]
+        for pattern in range_patterns:
+            match = re.search(pattern, q)
+            if match:
+                low = float(match.group(1))
+                high = float(match.group(2))
+                return (min(low, high), max(low, high))
+
+        # 2. 左右/大概/差不多
+        around_match = re.search(r"(\d+)\s*(?:元|块|块钱)?\s*(?:左右|大概|大约|差不多)", q)
+        if around_match:
+            price = float(around_match.group(1))
+            return (price * 0.67, price * 1.5)
+
+        # 3. 以内/以下/不到/不超过/预算
+        max_patterns = [
+            r"(?:预算|价格|价位|售价)?\s*(\d+)\s*(?:元|块|块钱)?\s*(?:以内|以下|之内|不到|不超过|最多|顶多|至多)",
+            r"(?:预算|价格|价位|售价)?\s*(?:不超过|不到|少于|小于|至多|最多|顶多)\s*(\d+)\s*(?:元|块|块钱)?",
+        ]
+        for pattern in max_patterns:
+            match = re.search(pattern, q)
+            if match:
+                return (0.0, float(match.group(1)))
+
+        # 4. 以上/超过/最少/至少
+        min_patterns = [
+            r"(\d+)\s*(?:元|块|块钱)?\s*(?:以上|之上|超过|多于|大于|最少|至少|起码)",
+            r"(?:超过|多于|大于|最少|至少|起码)\s*(\d+)\s*(?:元|块|块钱)?",
+        ]
+        for pattern in min_patterns:
+            match = re.search(pattern, q)
+            if match:
+                return (float(match.group(1)), None)
+
+        # 5. 单独数字 + 元/块/块钱（无明确方向），视为上限（如"300元的耳机"）
+        simple_match = re.search(r"(\d+)\s*(?:元|块|块钱)", q)
+        if simple_match:
+            return (0.0, float(simple_match.group(1)))
+
+        return None
+
+    def _matches_price_constraint(
+        self,
+        price: float | None,
+        price_constraint: tuple[float | None, float | None] | None,
+    ) -> bool:
+        """判断商品价格是否满足约束"""
+        if not price_constraint:
+            return True
+        if price is None:
+            return False
+        min_p, max_p = price_constraint
+        if min_p is not None and price < min_p:
+            return False
+        if max_p is not None and price > max_p:
+            return False
+        return True
+
+    def _extract_audience_keywords(self, question: str) -> list[str]:
+        """提取问题中的适用人群/场景关键词"""
+        q_lower = question.lower()
+        kws = []
+        for audience, words in AUDIENCE_KEYWORDS.items():
+            for word in words:
+                if word in q_lower and word not in kws:
+                    kws.append(word)
+        return kws
 
     def _search_product_by_question(self, db, question: str) -> Optional[Product]:
         """从问题关键词搜索数据库中最匹配的商品 - 带分类精准过滤
@@ -514,7 +627,10 @@ class RAGService:
     # ===== 多路召回与 Rerank =====
 
     def _multi_path_recall_products(
-        self, db, question: str
+        self,
+        db,
+        question: str,
+        price_constraint: tuple[float | None, float | None] | None = None,
     ) -> list[tuple[Product, float, str]]:
         """多路召回候选商品
 
@@ -524,8 +640,16 @@ class RAGService:
         q_lower = question.lower()
         detected_category = self._detect_category(question)
         primary_kws = self._extract_primary_keywords(question)
+        audience_kws = self._extract_audience_keywords(question)
         keywords = self._extract_keywords(question)
         search_kws = [kw for kw in keywords if 2 <= len(kw) <= 6] or keywords[:5]
+
+        # 辅助：计算商品名与人群/场景关键词的匹配得分
+        def audience_score(name: str) -> float:
+            if not audience_kws:
+                return 0.0
+            name_lower = name.lower()
+            return sum(2.5 for kw in audience_kws if kw.lower() in name_lower)
 
         # Path 1: 精确商品名匹配
         exact = self._try_exact_product_match(db, question)
@@ -547,6 +671,7 @@ class RAGService:
             for p in results:
                 name_lower = (p.name or "").lower()
                 score = sum(len(kw) * 5.0 for kw in primary_kws if kw.lower() in name_lower)
+                score += audience_score(p.name or "")
                 score += (p.rating or 0) * 0.1
                 candidates.append((p, score, "category_keyword"))
 
@@ -561,6 +686,7 @@ class RAGService:
                 score = sum(len(kw) * 2.0 for kw in search_kws if kw.lower() in name_lower)
                 if detected_category and p.category == detected_category:
                     score += 5.0
+                score += audience_score(p.name or "")
                 score += (p.rating or 0) * 0.1
                 candidates.append((p, score, "general_keyword"))
 
@@ -577,8 +703,15 @@ class RAGService:
                 select(Product).where(or_(*brand_conditions)).limit(30)
             ).scalars().all())
             for p in results:
-                score = 3.0 + (p.rating or 0) * 0.1
+                score = 3.0 + audience_score(p.name or "") + (p.rating or 0) * 0.1
                 candidates.append((p, score, "brand_knowledge"))
+
+        # 价格约束：严格过滤，未满足约束的商品直接剔除
+        if price_constraint:
+            candidates = [
+                (p, s, path) for p, s, path in candidates
+                if self._matches_price_constraint(p.price, price_constraint)
+            ]
 
         return candidates
 
@@ -614,6 +747,84 @@ class RAGService:
             f"候选数={len(ranked)}"
         )
         return best[0]
+
+    def _get_related_products(
+        self,
+        db,
+        product: Product,
+        question: str,
+        price_constraint: tuple[float | None, float | None] | None = None,
+        limit: int = 5,
+    ) -> list[Product]:
+        """获取与主商品及用户问题高度相关的同类商品
+
+        排序依据：
+        1. 价格满足用户约束
+        2. 商品名与主商品/用户问题的关键词重叠度
+        3. 评分与评价数
+        """
+        # 基础条件：同分类、排除主商品
+        stmt = (
+            select(Product)
+            .where(
+                Product.category == product.category,
+                Product.id != product.id,
+            )
+            .limit(100)
+        )
+        candidates = list(db.execute(stmt).scalars().all())
+        if not candidates:
+            return []
+
+        # 提取主商品名、用户问题、核心商品词、人群/场景关键词
+        product_name_kws = set(self._extract_keywords(product.name or ""))
+        question_kws = set(self._extract_keywords(question))
+        core_kws = set(self._extract_primary_keywords(question))
+        audience_kws = self._extract_audience_keywords(question)
+
+        scored = []
+        for p in candidates:
+            p_name_kws = set(self._extract_keywords(p.name or ""))
+            p_name_lower = (p.name or "").lower()
+
+            # 关键词重叠得分
+            overlap_with_product = len(product_name_kws & p_name_kws)
+            overlap_with_question = len(question_kws & p_name_kws)
+            core_match = sum(
+                3.0 for kw in core_kws if kw.lower() in p_name_lower
+            )
+
+            # 人群/场景关键词匹配
+            audience_match = sum(
+                2.5 for kw in audience_kws if kw.lower() in p_name_lower
+            )
+
+            # 价格约束满足度
+            price_match = 1.0 if self._matches_price_constraint(
+                p.price, price_constraint
+            ) else 0.0
+
+            # 综合得分
+            score = (
+                overlap_with_product * 2.0
+                + overlap_with_question * 1.5
+                + core_match * 3.0
+                + audience_match * 2.0
+                + price_match * 4.0
+                + (p.rating or 0) * 0.2
+                + min((p.review_count or 0), 1000) * 0.001
+            )
+            scored.append((score, p))
+
+        # 严格按价格约束过滤；存在满足约束的候选时只返回满足约束的
+        price_ok = [item for item in scored if self._matches_price_constraint(
+            item[1].price, price_constraint
+        )]
+        if price_ok:
+            scored = price_ok
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [p for _, p in scored[:limit]]
 
     def _retrieve_knowledge_context(
         self, db, question: str, product: Product
@@ -876,10 +1087,10 @@ class RAGService:
         rating = product.rating or 5.0
         review_count = product.review_count or 0
 
-        parts = [f"根据您的需求，我为您挑选了「{product.name}」："]
+        parts = [f"根据您的需求，为您推荐「{product.name}」："]
         parts.append(f"• 价格：¥{price:.0f}")
         parts.append(f"• 评分：{rating} 分（{review_count} 条评价）")
-        if brand and brand not in ("苏宁自营", "", "无", "未知", "通用"):
+        if brand:
             parts.append(f"• 品牌：{brand}")
         if product.selling_points:
             parts.append(f"• 亮点：{product.selling_points[:100]}")
@@ -899,11 +1110,7 @@ class RAGService:
                 parts.append(f"\n推荐理由：综合评分稳定，适合大多数用户选择。")
 
         if related:
-            parts.append(f"\n同分类其他优质选择：")
-            for i, p in enumerate(related[:3], 1):
-                parts.append(
-                    f"  {i}. 「{p.name}」¥{p.price or 0:.0f} | {p.rating or 5.0}分 | {p.review_count or 0}条评价"
-                )
+            parts.append(f"\n下方还为您推荐了同分类的其他优质选择，可点击查看详情～")
 
         parts.append(f"\n想要更精准推荐的话，可以告诉我您的预算、品牌偏好或主要用途～")
         return "\n".join(parts)
@@ -1189,108 +1396,38 @@ class RAGService:
         parts.append(f"\n还想了解价格、功能、售后或与其他商品对比的话，随时问我！")
         return "\n".join(parts)
 
-    def _build_no_match_answer(
-        self, question: str, q_type: str
+    def _build_ai_fallback_answer(
+        self, question: str, q_type: str, rag_failed: bool = False
     ) -> str:
-        """数据库未匹配到商品时的回答：更温暖、更具引导性"""
-        q_lower = question.lower()
-        result = ""
-
-        # 品牌问题：结合品牌知识库给出介绍，并推荐相关商品
-        for brand_key, info in BRAND_KNOWLEDGE.items():
-            if brand_key.lower() in q_lower:
-                result = (
-                    f"关于 {brand_key}：{info}\n\n"
-                    f"我们平台上也有不少 {brand_key} 的商品，"
-                    f"您可以直接告诉我具体想了解的型号或品类（比如「{brand_key} 耳机」），我帮您挑几款合适的～"
+        """数据库未匹配到商品或 RAG 检索失败时，调用 AI 生成自然回答"""
+        try:
+            payload = GuideQARequest(
+                question=question,
+                question_type=q_type if q_type != "general" else "auto",
+            )
+            result = ai_service.guide_qa(payload)
+            answer = result.get("answer", "")
+            tips = result.get("related_tips", [])
+            if tips:
+                answer += "\n\n" + "\n".join(f"• {t}" for t in tips)
+            return answer
+        except Exception as e:
+            logger.warning(f"AI 兜底回答生成失败: {e}")
+            if rag_failed:
+                return (
+                    "抱歉，我在检索商品信息时遇到了一点问题，暂时无法给出精准推荐。\n\n"
+                    "您可以换个说法再试试，比如：\n"
+                    "• 「推荐一款 200 元以内的蓝牙耳机」\n"
+                    "• 「华为 FreeBuds 多少钱」\n"
+                    "• 「口碑好的猫粮有哪些」"
                 )
-                break
-
-        # 通用购物引导
-        if not result and any(kw in question for kw in ["怎么买", "如何下单", "怎么下单", "怎么购买", "如何购买"]):
-            result = (
-                "购物其实很简单，跟着我一步步来：\n"
-                "1. 在「商品浏览」页找到心仪商品，或直接在搜索框输入关键词；\n"
-                "2. 点击商品卡片查看详情、价格和真实评价；\n"
-                "3. 选择数量后点击「加入购物车」或「立即购买」；\n"
-                "4. 进入购物车确认商品和收货地址，提交订单并完成支付即可。\n\n"
-                "如果您不确定买哪款，也可以告诉我预算和用途，我来帮您推荐！"
-            )
-
-        # 售后/平台规则
-        if not result and any(kw in question for kw in ["运费", "发票", "退换货", "售后", "保修", "质保"]):
-            result = (
-                "关于平台服务，您可以放心：\n"
-                "• 大部分商品支持 7 天无理由退换货；\n"
-                "• 质量问题可在 30 天内申请退换；\n"
-                "• 如需发票，可在下单时备注或联系商家客服；\n"
-                "• 具体售后政策以商品详情页说明为准。\n\n"
-                "如果您想咨询某款商品的售后细节，请把商品名称发给我，我帮您查询。"
-            )
-
-        # 问候语
-        if not result and any(kw in q_lower for kw in ["你好", "在吗", "有人吗", "hello", "hi", "嗨", "您好"]):
-            result = (
-                "您好呀！我是您的智能导购助手，专门帮您省心购物～\n"
-                "我可以做的事：\n"
-                "• 根据您的需求推荐合适的商品\n"
-                "• 查询商品价格、评价和卖点\n"
-                "• 对比几款相似商品，帮您做选择\n"
-                "• 解答品牌、功能、售后等问题\n\n"
-                "请直接告诉我您想买什么，比如「推荐一款 200 元以内的蓝牙耳机」，我马上帮您找！"
-            )
-
-        # 根据问题类型给出更针对性的引导
-        if not result and q_type == "price":
-            result = (
-                "我没找到完全匹配的商品来报价，您可以换个说法试试：\n"
-                "• 直接说商品名称，如「华为 FreeBuds 多少钱」\n"
-                "• 说预算和需求，如「300 元以内有什么好用的音箱」\n\n"
-                "我就能从商品库中调出真实价格帮您对比。"
-            )
-
-        if not result and q_type == "recommend":
-            result = (
-                "我很乐意帮您推荐！为了更精准，您可以这样描述：\n"
-                "• 用途 + 预算，例如「学生党，想买 500 元以内的平板」\n"
-                "• 品牌偏好 + 品类，例如「小米的电饭煲推荐哪款」\n\n"
-                "我会结合商品库里的真实数据和评价给您建议。"
-            )
-
-        if not result and q_type == "review":
-            result = (
-                "我暂时没检索到对应商品的真实评价，您可以：\n"
-                "• 发送准确的商品名称，如「iPhone 15 评价怎么样」\n"
-                "• 或者告诉我品类，如「口碑好的猫粮有哪些」\n\n"
-                "我会从已有评价中帮您总结优缺点。"
-            )
-
-        # 兜底：拉取几个热门分类做引导
-        if not result:
-            try:
-                with SessionLocal() as db:
-                    top_cats = list(db.execute(
-                        select(Product.category, func.count(Product.id).label("cnt"))
-                        .where(Product.category.isnot(None))
-                        .group_by(Product.category)
-                        .order_by(desc("cnt"))
-                        .limit(5)
-                    ).all())
-                    cat_hints = "、".join([c[0] for c in top_cats if c[0]]) or "数码电子、家居家电、化妆品、宠物用品"
-            except Exception:
-                cat_hints = "数码电子、家居家电、化妆品、宠物用品"
-
-            result = (
+            return (
                 "抱歉，我暂时没从商品库中找到与您的问题直接匹配的商品。\n\n"
-                "您可以尝试以下方式：\n"
+                "您可以尝试：\n"
                 "• 发送具体商品名称，例如「兰蔻小黑瓶精华」\n"
                 "• 描述需求和预算，例如「推荐一款性价比高的扫地机器人」\n"
-                "• 询问品牌信息，例如「索尼耳机怎么样」\n\n"
-                f"目前平台覆盖较全的品类有：{cat_hints}。\n"
-                "告诉我您想买什么，我马上帮您找！"
+                "• 询问品牌信息，例如「索尼耳机怎么样」"
             )
-
-        return result
 
     # ===== 辅助方法 =====
 

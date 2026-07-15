@@ -224,21 +224,11 @@ def create_order():
     pay_method = data.get("pay_method", "wechat")
     remark = data.get("remark", "")
     item_ids = data.get("item_ids", [])
+    product_id = _safe_int(data.get("product_id"))
+    quantity = _safe_int(data.get("quantity"), 1)
 
     try:
         with SessionLocal() as db:
-            # 获取购物车选中项
-            stmt = select(CartItem).where(
-                CartItem.user_id == user_payload["user_id"],
-                CartItem.selected == True,
-            )
-            if item_ids:
-                stmt = stmt.where(CartItem.id.in_(item_ids))
-
-            cart_items = list(db.execute(stmt).scalars().all())
-            if not cart_items:
-                return jsonify({"error": "empty_cart", "message": "购物车没有选中商品"}), 400
-
             # 获取地址
             address = None
             if address_id:
@@ -253,27 +243,59 @@ def create_order():
             if not address:
                 return jsonify({"error": "no_address", "message": "请先添加收货地址"}), 400
 
-            # 计算总金额
+            # 计算总金额、组装订单项
             total_amount = 0.0
             order_items_data = []
-            for ci in cart_items:
-                product = db.get(Product, ci.product_id)
+            first_product_id = None
+
+            # 模式 A：直接购买（立即购买）
+            if product_id:
+                product = db.get(Product, product_id)
                 if not product:
-                    continue
-                total_amount += (product.price or 0) * ci.quantity
+                    return jsonify({"error": "invalid_product", "message": "商品不存在"}), 400
+                if quantity < 1:
+                    return jsonify({"error": "invalid_quantity", "message": "购买数量不能小于 1"}), 400
+                total_amount += (product.price or 0) * quantity
                 order_items_data.append({
                     "product_id": product.id,
                     "product_name": product.name,
                     "price": product.price or 0,
-                    "quantity": ci.quantity,
+                    "quantity": quantity,
                     "image_url": product.image_url or "",
                 })
+                first_product_id = product.id
+            else:
+                # 模式 B：从购物车选中项下单
+                stmt = select(CartItem).where(
+                    CartItem.user_id == user_payload["user_id"],
+                    CartItem.selected == True,
+                )
+                if item_ids:
+                    stmt = stmt.where(CartItem.id.in_(item_ids))
 
-            if not order_items_data:
-                return jsonify({"error": "empty_cart", "message": "没有有效商品"}), 400
+                cart_items = list(db.execute(stmt).scalars().all())
+                if not cart_items:
+                    return jsonify({"error": "empty_cart", "message": "购物车没有选中商品"}), 400
+
+                for ci in cart_items:
+                    product = db.get(Product, ci.product_id)
+                    if not product:
+                        continue
+                    total_amount += (product.price or 0) * ci.quantity
+                    order_items_data.append({
+                        "product_id": product.id,
+                        "product_name": product.name,
+                        "price": product.price or 0,
+                        "quantity": ci.quantity,
+                        "image_url": product.image_url or "",
+                    })
+
+                if not order_items_data:
+                    return jsonify({"error": "empty_cart", "message": "没有有效商品"}), 400
+
+                first_product_id = cart_items[0].product_id
 
             # 创建订单
-            first_product_id = cart_items[0].product_id
             order_no = generate_order_no(db, first_product_id)
             order = Order(
                 order_no=order_no,
@@ -299,9 +321,10 @@ def create_order():
                 )
                 db.add(oi)
 
-            # 清除已下单的购物车项
-            for ci in cart_items:
-                db.delete(ci)
+            # 购物车模式下清除已下单的购物车项
+            if not product_id:
+                for ci in cart_items:
+                    db.delete(ci)
 
             db.commit()
             db.refresh(order)
@@ -670,7 +693,9 @@ def list_favorites():
             for fav in favs:
                 product = db.get(Product, fav.product_id)
                 if product:
-                    result.append(product.to_dict())
+                    p = product.to_dict()
+                    p["product_id"] = product.id
+                    result.append(p)
 
             return jsonify({"favorites": result, "total": len(result)})
     except Exception as e:
@@ -760,6 +785,7 @@ def list_history():
                 product = db.get(Product, h.product_id)
                 if product:
                     p = product.to_dict()
+                    p["product_id"] = product.id
                     p["viewed_at"] = h.created_at.isoformat() if h.created_at else None
                     result.append(p)
 

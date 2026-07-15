@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import {
+  ChatBubbleLeftRightIcon,
+  SparklesIcon,
+  DocumentTextIcon,
+  MagnifyingGlassIcon,
+  ArrowPathIcon,
+} from '@heroicons/vue/24/outline'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
-/** 携带鉴权头的请求头 */
 function authHeaders(extra: Record<string, string> = {}): HeadersInit {
   const token = localStorage.getItem('token')
   return {
@@ -17,7 +23,6 @@ interface KeywordItem {
   count: number
 }
 
-/** 原始关键词对象，兼容不同后端字段命名 */
 interface RawKeyword {
   keyword?: string
   word?: string
@@ -49,8 +54,9 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const stats = ref<QAStats | null>(null)
 const records = ref<QARecord[]>([])
+const keywordQuery = ref('')
+const recordQuery = ref('')
 
-// 来源与类型显示配置
 const sourceLabels: Record<string, string> = {
   rag: 'RAG检索',
   data_rag: '数据驱动',
@@ -74,6 +80,27 @@ const typeLabels: Record<string, string> = {
   general: '综合咨询',
 }
 
+const sourceColors: Record<string, string> = {
+  rag: 'bg-emerald-500',
+  data_rag: 'bg-emerald-500',
+  template: 'bg-blue-500',
+  knowledge: 'bg-amber-500',
+  fallback: 'bg-slate-400',
+}
+
+const typeColors: Record<string, string> = {
+  recommend: 'bg-purple-500',
+  price: 'bg-rose-500',
+  brand: 'bg-blue-500',
+  review: 'bg-amber-500',
+  size: 'bg-cyan-500',
+  matching: 'bg-pink-500',
+  after_sale: 'bg-slate-500',
+  general: 'bg-emerald-500',
+  function: 'bg-indigo-500',
+  compare: 'bg-orange-500',
+}
+
 function sourceLabel(src?: string): string {
   if (!src) return '未知'
   return sourceLabels[src] || src
@@ -89,59 +116,75 @@ const totalQuestions = computed(() => {
   return stats.value.total_questions ?? stats.value.total ?? 0
 })
 
-const sourceDistribution = computed<{ key: string; label: string; value: number }[]>(() => {
+const sourceDistribution = computed<{ key: string; label: string; value: number; color: string }[]>(() => {
   if (!stats.value) return []
   const dist = stats.value.source_distribution || {}
-  const entries = Object.entries(dist)
-  if (entries.length === 0) return []
-  return entries.map(([key, value]) => ({
-    key,
-    label: sourceLabel(key),
-    value: Number(value) || 0,
-  }))
+  return Object.entries(dist)
+    .filter(([, value]) => Number(value) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([key, value]) => ({
+      key,
+      label: sourceLabel(key),
+      value: Number(value) || 0,
+      color: sourceColors[key] || 'bg-primary',
+    }))
 })
 
-const typeDistribution = computed<{ key: string; label: string; value: number }[]>(() => {
+const typeDistribution = computed<{ key: string; label: string; value: number; color: string }[]>(() => {
   if (!stats.value) return []
   const dist = stats.value.type_distribution || {}
-  const entries = Object.entries(dist)
-  if (entries.length === 0) return []
-  return entries.map(([key, value]) => ({
-    key,
-    label: typeLabel(key),
-    value: Number(value) || 0,
-  }))
+  return Object.entries(dist)
+    .filter(([, value]) => Number(value) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([key, value]) => ({
+      key,
+      label: typeLabel(key),
+      value: Number(value) || 0,
+      color: typeColors[key] || 'bg-primary',
+    }))
 })
 
-/** 关键词条目，统一为 { keyword, count } 结构 */
 const keywordItems = computed<KeywordItem[]>(() => {
   if (!stats.value || !stats.value.top_keywords) return []
-  return stats.value.top_keywords.map((k) => {
-    if (typeof k === 'string') return { keyword: k, count: 1 }
-    return { keyword: k.keyword || k.word || '', count: Number(k.count || k.frequency || 1) }
-  }).filter((k) => k.keyword)
+  return stats.value.top_keywords
+    .map((k) => {
+      if (typeof k === 'string') return { keyword: k, count: 1 }
+      return { keyword: k.keyword || k.word || '', count: Number(k.count || k.frequency || 1) }
+    })
+    .filter((k) => k.keyword)
+    .sort((a, b) => b.count - a.count)
 })
 
-/** 最大频次，用于映射字号 */
-const maxCount = computed(() => {
-  return keywordItems.value.reduce((max, k) => Math.max(max, k.count), 1)
+const filteredKeywords = computed(() => {
+  if (!keywordQuery.value.trim()) return keywordItems.value
+  const q = keywordQuery.value.toLowerCase()
+  return keywordItems.value.filter((k) => k.keyword.toLowerCase().includes(q))
 })
 
-const minCount = computed(() => {
-  return keywordItems.value.reduce((min, k) => Math.min(min, k.count), 1)
+const filteredRecords = computed(() => {
+  if (!recordQuery.value.trim()) return records.value
+  const q = recordQuery.value.toLowerCase()
+  return records.value.filter(
+    (r) =>
+      r.question.toLowerCase().includes(q) ||
+      (r.answer && r.answer.toLowerCase().includes(q)) ||
+      sourceLabel(r.source).toLowerCase().includes(q) ||
+      typeLabel(r.question_type || r.type).toLowerCase().includes(q),
+  )
 })
 
-/** 根据频次计算字号（14px ~ 32px 之间） */
+const maxCount = computed(() => keywordItems.value.reduce((max, k) => Math.max(max, k.count), 1))
+const minCount = computed(() => keywordItems.value.reduce((min, k) => Math.min(min, k.count), 1))
+
 function keywordFontSize(count: number): string {
   if (keywordItems.value.length === 0) return '14px'
   const range = maxCount.value - minCount.value
   if (range === 0) return '18px'
   const ratio = (count - minCount.value) / range
-  const size = 14 + ratio * 18
+  const size = 14 + ratio * 22
   return `${size.toFixed(0)}px`
 }
 
-/** 根据频次计算颜色深浅 */
 function keywordOpacity(count: number): number {
   if (keywordItems.value.length === 0) return 1
   const range = maxCount.value - minCount.value
@@ -165,7 +208,6 @@ function percent(value: number, total: number): string {
 
 function formatTime(t?: string): string {
   if (!t) return '-'
-  // 截取到分钟
   return t.replace('T', ' ').slice(0, 16)
 }
 
@@ -178,12 +220,11 @@ async function loadStats() {
       fetch(`${API_BASE}/api/merchant/qa/records?limit=50`, { headers: authHeaders() }),
     ])
 
-    if (statsRes.ok) {
-      stats.value = await statsRes.json()
-    } else {
+    if (!statsRes.ok) {
       const err = await statsRes.json().catch(() => ({}))
       throw new Error(err.message || `HTTP ${statsRes.status}`)
     }
+    stats.value = await statsRes.json()
 
     if (recordsRes.ok) {
       const data = await recordsRes.json()
@@ -196,370 +237,204 @@ async function loadStats() {
   }
 }
 
-onMounted(() => {
-  loadStats()
-})
+onMounted(loadStats)
 </script>
 
 <template>
-  <div class="qa-page">
-    <div v-if="error" class="qa-error">{{ error }}</div>
+  <div class="min-h-[calc(100vh-7rem)] space-y-6 animate-fade-in-up">
+    <!-- 页面头部 -->
+    <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary via-primary to-accent-blue p-6 sm:p-8 shadow-xl shadow-primary/20">
+      <div class="absolute top-0 right-0 w-64 h-64 rounded-full bg-white/10 blur-3xl -translate-y-1/2 translate-x-1/4 pointer-events-none"></div>
+      <div class="absolute bottom-0 left-0 w-48 h-48 rounded-full bg-accent-blue/20 blur-3xl translate-y-1/3 -translate-x-1/4 pointer-events-none"></div>
+      <div class="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h1 class="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-3">
+            <ChatBubbleLeftRightIcon class="w-8 h-8" />
+            用户问答统计
+          </h1>
+          <p class="text-white/70 text-sm mt-2">洞察用户咨询趋势，优化客服与 RAG 回答质量</p>
+        </div>
+        <button
+          @click="loadStats"
+          :disabled="loading"
+          class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/20 backdrop-blur-sm text-white text-sm font-semibold hover:bg-white/30 transition-all disabled:opacity-60"
+        >
+          <ArrowPathIcon :class="['w-4 h-4', loading && 'animate-spin']" />
+          刷新数据
+        </button>
+      </div>
+    </div>
 
-    <div v-if="loading" class="qa-loading">
-      <div class="qa-spinner"></div>
-      <p>加载中...</p>
+    <!-- 错误提示 -->
+    <div v-if="error" class="bg-rose-50 border border-rose-100 text-rose-600 px-5 py-3 rounded-2xl text-sm font-medium flex items-center gap-2">
+      <svg class="w-5 h-5 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+      {{ error }}
+    </div>
+
+    <!-- 加载中 -->
+    <div v-if="loading" class="flex flex-col items-center justify-center py-24 text-gray-400">
+      <div class="w-14 h-14 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4"></div>
+      <p class="text-sm">正在加载问答数据...</p>
     </div>
 
     <template v-else>
-      <!-- 统计卡片 -->
-      <div class="qa-stat-cards">
-        <div class="qa-stat-card qa-stat-card--main">
-          <div class="qa-stat-card__value">{{ totalQuestions }}</div>
-          <div class="qa-stat-card__label">总问题数</div>
-        </div>
-
-        <!-- 来源分布卡片 -->
-        <div class="qa-stat-card">
-          <div class="qa-stat-card__title">按来源分布</div>
-          <div v-if="sourceDistribution.length" class="qa-distribution">
-            <div v-for="item in sourceDistribution" :key="item.key" class="qa-dist-row">
-              <span class="qa-dist-label">{{ item.label }}</span>
-              <div class="qa-dist-bar-wrap">
-                <div
-                  class="qa-dist-bar"
-                  :style="{ width: percent(item.value, sourceTotal()) }"
-                ></div>
-              </div>
-              <span class="qa-dist-value">{{ item.value }} ({{ percent(item.value, sourceTotal()) }})</span>
+      <!-- 核心指标卡 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <!-- 总问题数 -->
+        <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary to-primary-dark p-6 text-white shadow-lg shadow-primary/20">
+          <div class="absolute -top-6 -right-6 w-32 h-32 rounded-full bg-white/10 blur-2xl pointer-events-none"></div>
+          <div class="relative z-10 flex items-center gap-4">
+            <div class="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
+              <ChatBubbleLeftRightIcon class="w-7 h-7" />
+            </div>
+            <div>
+              <div class="text-4xl font-extrabold">{{ totalQuestions }}</div>
+              <div class="text-sm text-white/80 mt-0.5">总问题数</div>
             </div>
           </div>
-          <div v-else class="qa-na">暂无数据</div>
         </div>
 
-        <!-- 类型分布卡片 -->
-        <div class="qa-stat-card">
-          <div class="qa-stat-card__title">按类型分布</div>
-          <div v-if="typeDistribution.length" class="qa-distribution">
-            <div v-for="item in typeDistribution" :key="item.key" class="qa-dist-row">
-              <span class="qa-dist-label">{{ item.label }}</span>
-              <div class="qa-dist-bar-wrap">
+        <!-- 来源分布 -->
+        <div class="bg-white rounded-3xl border border-primary-light/40 shadow-sm p-5 md:col-span-2">
+          <div class="flex items-center gap-2 mb-4">
+            <SparklesIcon class="w-5 h-5 text-primary" />
+            <h3 class="font-bold text-gray-800">按来源分布</h3>
+          </div>
+          <div v-if="sourceDistribution.length" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+            <div
+              v-for="item in sourceDistribution"
+              :key="item.key"
+              class="relative overflow-hidden rounded-2xl bg-gray-50 p-4 border border-gray-100 hover:shadow-md transition-shadow"
+            >
+              <div class="absolute top-0 left-0 w-1 h-full" :class="item.color"></div>
+              <div class="text-xs text-gray-500 mb-1">{{ item.label }}</div>
+              <div class="text-2xl font-extrabold text-gray-800">{{ item.value }}</div>
+              <div class="text-xs text-gray-400 mt-1">{{ percent(item.value, sourceTotal()) }}</div>
+            </div>
+          </div>
+          <div v-else class="text-center text-gray-400 py-8 text-sm">暂无来源数据</div>
+        </div>
+      </div>
+
+      <!-- 类型分布 + 关键词云 -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <!-- 类型分布 -->
+        <div class="bg-white rounded-3xl border border-primary-light/40 shadow-sm p-5">
+          <div class="flex items-center gap-2 mb-4">
+            <DocumentTextIcon class="w-5 h-5 text-primary" />
+            <h3 class="font-bold text-gray-800">按类型分布</h3>
+          </div>
+          <div v-if="typeDistribution.length" class="space-y-3">
+            <div v-for="item in typeDistribution" :key="item.key" class="group">
+              <div class="flex items-center justify-between text-sm mb-1.5">
+                <span class="font-medium text-gray-700 flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full" :class="item.color"></span>
+                  {{ item.label }}
+                </span>
+                <span class="text-gray-500 text-xs font-semibold">{{ item.value }} · {{ percent(item.value, typeTotal()) }}</span>
+              </div>
+              <div class="h-2.5 bg-gray-100 rounded-full overflow-hidden">
                 <div
-                  class="qa-dist-bar qa-dist-bar--type"
+                  class="h-full rounded-full transition-all duration-700 ease-out"
+                  :class="item.color"
                   :style="{ width: percent(item.value, typeTotal()) }"
                 ></div>
               </div>
-              <span class="qa-dist-value">{{ item.value }} ({{ percent(item.value, typeTotal()) }})</span>
             </div>
           </div>
-          <div v-else class="qa-na">暂无数据</div>
+          <div v-else class="text-center text-gray-400 py-8 text-sm">暂无类型数据</div>
+        </div>
+
+        <!-- 高频关键词云 -->
+        <div class="bg-white rounded-3xl border border-primary-light/40 shadow-sm p-5">
+          <div class="flex items-center justify-between gap-3 mb-4">
+            <div class="flex items-center gap-2">
+              <MagnifyingGlassIcon class="w-5 h-5 text-primary" />
+              <h3 class="font-bold text-gray-800">高频问题关键词</h3>
+            </div>
+            <div class="relative">
+              <MagnifyingGlassIcon class="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                v-model="keywordQuery"
+                type="text"
+                placeholder="搜索关键词..."
+                class="pl-8 pr-3 py-1.5 text-xs rounded-xl border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none w-36"
+              />
+            </div>
+          </div>
+          <div v-if="filteredKeywords.length" class="flex flex-wrap gap-2.5 min-h-[120px] content-start">
+            <span
+              v-for="kw in filteredKeywords"
+              :key="kw.keyword"
+              class="inline-flex items-center px-3 py-1.5 rounded-full font-semibold transition-all hover:-translate-y-0.5 hover:shadow-sm cursor-default"
+              :style="{
+                fontSize: keywordFontSize(kw.count),
+                opacity: keywordOpacity(kw.count),
+                backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                color: '#7c3aed',
+              }"
+            >
+              {{ kw.keyword }}
+              <span class="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-white/60 text-primary/80">{{ kw.count }}</span>
+            </span>
+          </div>
+          <div v-else class="text-center text-gray-400 py-8 text-sm">{{ keywordQuery ? '无匹配关键词' : '暂无关键词数据' }}</div>
         </div>
       </div>
 
-      <!-- 高频问题关键词云 -->
-      <div class="qa-section">
-        <h3 class="qa-section__title">高频问题关键词</h3>
-        <div v-if="keywordItems.length" class="qa-cloud">
-          <span
-            v-for="kw in keywordItems"
-            :key="kw.keyword"
-            class="qa-cloud-tag"
-            :style="{
-              fontSize: keywordFontSize(kw.count),
-              opacity: keywordOpacity(kw.count),
-            }"
+      <!-- 问答记录 -->
+      <div class="bg-white rounded-3xl border border-primary-light/40 shadow-sm p-5">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+          <div class="flex items-center gap-2">
+            <ChatBubbleLeftRightIcon class="w-5 h-5 text-primary" />
+            <h3 class="font-bold text-gray-800">问答记录</h3>
+            <span class="text-xs text-gray-400 font-normal">最近 {{ records.length }} 条</span>
+          </div>
+          <div class="relative w-full sm:w-64">
+            <MagnifyingGlassIcon class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              v-model="recordQuery"
+              type="text"
+              placeholder="搜索问题、回答、来源或类型..."
+              class="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10 outline-none"
+            />
+          </div>
+        </div>
+
+        <div v-if="filteredRecords.length" class="space-y-3 max-h-[640px] overflow-y-auto pr-1">
+          <div
+            v-for="(record, idx) in filteredRecords"
+            :key="record.id ?? idx"
+            class="group rounded-2xl border border-gray-100 bg-gray-50/50 hover:bg-white hover:shadow-md hover:border-primary-light/50 transition-all p-4"
           >
-            {{ kw.keyword }}
-          </span>
-        </div>
-        <div v-else class="qa-na">暂无关键词数据</div>
-      </div>
-
-      <!-- 问答记录列表 -->
-      <div class="qa-section">
-        <h3 class="qa-section__title">问答记录（最近 50 条）</h3>
-        <div v-if="records.length" class="qa-records">
-          <div v-for="(record, idx) in records" :key="record.id ?? idx" class="qa-record">
-            <div class="qa-record__head">
-              <span class="qa-record__time">{{ formatTime(record.time || record.created_at) }}</span>
-              <span class="qa-record__source" :class="{ 'qa-record__source--rag': (record.source || '').includes('rag') || (record.source || '').includes('data') }">
+            <div class="flex flex-wrap items-center gap-2 mb-2.5">
+              <span class="text-xs text-gray-400 font-medium">{{ formatTime(record.time || record.created_at) }}</span>
+              <span
+                class="px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                :class="[
+                  (record.source || '').includes('rag') || (record.source || '').includes('data')
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : 'bg-amber-50 text-amber-600',
+                ]"
+              >
                 {{ sourceLabel(record.source) }}
               </span>
-              <span class="qa-record__type">{{ typeLabel(record.question_type || record.type) }}</span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary">
+                {{ typeLabel(record.question_type || record.type) }}
+              </span>
             </div>
-            <div class="qa-record__question">
-              <span class="qa-record__q-label">问：</span>{{ record.question }}
+            <div class="text-sm text-gray-800 font-medium leading-relaxed mb-1.5">
+              <span class="text-primary font-bold">问：</span>{{ record.question }}
             </div>
-            <div v-if="record.answer" class="qa-record__answer">
-              <span class="qa-record__a-label">答：</span>{{ record.answer }}
+            <div v-if="record.answer" class="text-sm text-gray-500 leading-relaxed line-clamp-3">
+              <span class="text-emerald-600 font-bold">答：</span>{{ record.answer }}
             </div>
           </div>
         </div>
-        <div v-else class="qa-na">暂无问答记录</div>
+        <div v-else class="text-center text-gray-400 py-10 text-sm">
+          {{ recordQuery ? '无匹配记录' : '暂无问答记录' }}
+        </div>
       </div>
     </template>
   </div>
 </template>
-
-<style scoped>
-.qa-page {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-/* 统计卡片 */
-.qa-stat-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-
-.qa-stat-card {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--panel);
-  padding: 20px;
-  box-shadow: var(--shadow, 0 2px 8px rgba(0, 0, 0, 0.08));
-}
-
-.qa-stat-card--main {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
-  color: #fff;
-  border-color: var(--brand-dark);
-}
-
-.qa-stat-card--main .qa-stat-card__value {
-  font-size: 48px;
-  font-weight: 800;
-  line-height: 1;
-  margin-bottom: 8px;
-}
-
-.qa-stat-card--main .qa-stat-card__label {
-  font-size: 15px;
-  opacity: 0.9;
-}
-
-.qa-stat-card__title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--brand-dark);
-  margin-bottom: 14px;
-}
-
-/* 分布条 */
-.qa-distribution {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.qa-dist-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.qa-dist-label {
-  width: 64px;
-  flex: 0 0 auto;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.qa-dist-bar-wrap {
-  flex: 1;
-  height: 18px;
-  background: rgba(217, 95, 45, 0.08);
-  border-radius: 9px;
-  overflow: hidden;
-}
-
-.qa-dist-bar {
-  height: 100%;
-  border-radius: 9px;
-  background: linear-gradient(90deg, var(--brand), var(--brand-dark));
-  transition: width 0.4s ease;
-  min-width: 4px;
-}
-
-.qa-dist-bar--type {
-  background: linear-gradient(90deg, var(--green, #1f8a5b), #155a3c);
-}
-
-.qa-dist-value {
-  flex: 0 0 auto;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-/* 区块 */
-.qa-section {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--panel);
-  padding: 20px;
-}
-
-.qa-section__title {
-  margin: 0 0 16px;
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--brand-dark);
-}
-
-/* 关键词云 */
-.qa-cloud {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  line-height: 1.6;
-}
-
-.qa-cloud-tag {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 16px;
-  color: var(--brand-dark);
-  background: rgba(217, 95, 45, 0.1);
-  font-weight: 600;
-  transition: all 0.2s;
-  cursor: default;
-}
-
-.qa-cloud-tag:hover {
-  background: rgba(217, 95, 45, 0.2);
-  transform: translateY(-2px);
-}
-
-/* 问答记录 */
-.qa-records {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: 560px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.qa-record {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.5);
-  transition: box-shadow 0.2s;
-}
-
-.qa-record:hover {
-  box-shadow: var(--shadow, 0 2px 8px rgba(0, 0, 0, 0.08));
-}
-
-.qa-record__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.qa-record__time {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.qa-record__source {
-  padding: 2px 10px;
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 600;
-  background: rgba(188, 131, 33, 0.15);
-  color: var(--yellow, #bc8321);
-}
-
-.qa-record__source--rag {
-  background: rgba(31, 138, 91, 0.15);
-  color: var(--green, #1f8a5b);
-}
-
-.qa-record__type {
-  padding: 2px 10px;
-  border-radius: 10px;
-  font-size: 12px;
-  background: rgba(217, 95, 45, 0.1);
-  color: var(--brand-dark);
-}
-
-.qa-record__question {
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--ink);
-  margin-bottom: 4px;
-}
-
-.qa-record__q-label {
-  font-weight: 700;
-  color: var(--brand);
-}
-
-.qa-record__answer {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
-.qa-record__a-label {
-  font-weight: 700;
-  color: var(--green, #1f8a5b);
-}
-
-/* 通用 */
-.qa-na {
-  text-align: center;
-  color: var(--muted);
-  padding: 24px 0;
-  font-size: 14px;
-}
-
-.qa-loading {
-  text-align: center;
-  padding: 60px 0;
-  color: var(--muted);
-}
-
-.qa-spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid var(--line);
-  border-top-color: var(--brand);
-  border-radius: 50%;
-  animation: qa-spin 1s linear infinite;
-  margin: 0 auto 12px;
-}
-
-@keyframes qa-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.qa-error {
-  background: #fee;
-  color: #c33;
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-size: 14px;
-}
-
-@media (max-width: 768px) {
-  .qa-stat-cards {
-    grid-template-columns: 1fr;
-  }
-}
-</style>
